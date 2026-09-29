@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block title %}Live Exercise – PhysioFlex{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<style>
+  #video, #canvas { transform: scaleX(-1); }
+  #video.back-cam, #canvas.back-cam { transform: none; }
+</style>
+{% endblock %}
+{% block body %}
+<div class="min-h-screen flex flex-col bg-gray-900 text-white">
+  <nav class="bg-gray-900/80 border-b border-gray-700 sticky top-0 z-20">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <a href="/patient" class="text-gray-400 hover:text-white text-sm">← Back</a>
+        <span class="font-semibold">Live Workout</span>
+      </div>
+      <div class="flex items-center gap-2 flex-wrap justify-end">
+        <span id="statusBadge" class="text-xs px-2 py-1 rounded-full bg-gray-700">Ready</span>
+        <button id="btnFlip" onclick="switchCamera()" class="px-3 py-1.5 bg-gray-700 rounded-lg text-sm hover:bg-gray-600" title="Switch front/back camera">🔄 Camera</button>
+        <button id="btnStart" onclick="toggleSession()" class="px-4 py-1.5 bg-violet-600 rounded-lg text-sm font-medium hover:bg-violet-700">Start Camera</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="flex-1 max-w-6xl mx-auto w-full px-4 py-6 grid lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 relative">
+      <div class="relative rounded-2xl overflow-hidden bg-black aspect-video">
+        <video id="video" class="absolute inset-0 w-full h-full object-cover" playsinline muted></video>
+        <canvas id="canvas" class="absolute inset-0 w-full h-full"></canvas>
+        <div id="noCamera" class="absolute inset-0 flex items-center justify-center text-gray-500">
+          <div class="text-center">
+            <div class="text-4xl mb-2">📷</div>
+            <p>Camera will appear here</p>
+            <p class="text-xs mt-1">Use 🔄 to switch Front / Back camera</p>
+          </div>
+        </div>
+      </div>
+      <div id="feedback" class="mt-3 text-center text-sm text-gray-300 min-h-[1.5rem]"></div>
+    </div>
+
+    <div class="space-y-4">
+      <div class="bg-gray-800 rounded-2xl p-5">
+        <div class="text-xs text-gray-400 mb-1">Exercise</div>
+        <div id="exName" class="text-lg font-semibold">Seated Knee Extension</div>
+        <div class="text-xs text-gray-500 mt-1">Target: <span id="exTarget">12</span> reps · <span id="exRomTarget">120</span>°</div>
+      </div>
+
+      <div class="bg-gray-800 rounded-2xl p-4">
+        <div class="text-xs text-gray-400 mb-2">Body side to track</div>
+        <div class="flex gap-2">
+          <button id="btnLeft" onclick="setSide('left')" class="flex-1 py-2 rounded-lg text-sm bg-gray-700 hover:bg-gray-600">Left</button>
+          <button id="btnRight" onclick="setSide('right')" class="flex-1 py-2 rounded-lg text-sm bg-violet-600">Right</button>
+        </div>
+        <div class="text-xs text-gray-500 mt-2">Camera: <span id="camLabel">Front</span></div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div class="bg-gray-800 rounded-xl p-4 text-center">
+          <div class="text-3xl font-bold text-violet-400" id="mAngle">–°</div>
+          <div class="text-xs text-gray-400 mt-1">Joint Angle</div>
+        </div>
+        <div class="bg-gray-800 rounded-xl p-4 text-center">
+          <div class="text-3xl font-bold text-emerald-400" id="mReps">0</div>
+          <div class="text-xs text-gray-400 mt-1">Repetitions</div>
+        </div>
+        <div class="bg-gray-800 rounded-xl p-4 text-center">
+          <div class="text-3xl font-bold text-amber-400" id="mQuality">–</div>
+          <div class="text-xs text-gray-400 mt-1">Quality</div>
+        </div>
+        <div class="bg-gray-800 rounded-xl p-4 text-center">
+          <div class="text-3xl font-bold" id="mMaxRom">–°</div>
+          <div class="text-xs text-gray-400 mt-1">Max ROM</div>
+        </div>
+      </div>
+
+      <div class="bg-gray-800 rounded-2xl p-5">
+        <label class="text-xs text-gray-400">Pain Level (0-10)</label>
+        <input id="painSlider" type="range" min="0" max="10" value="3" class="w-full mt-2" />
+        <div class="text-center text-lg font-semibold mt-1"><span id="painVal">3</span>/10</div>
+      </div>
+
+      <button id="btnFinish" onclick="finishSession()" disabled
+              class="w-full py-3 bg-emerald-600 rounded-xl font-medium hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed">
+        Complete Session
+      </button>
+    </div>
+  </main>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const user = requireAuth(['patient']);
+if (!user) throw new Error('auth');
+
+const params = new URLSearchParams(location.search);
+const exerciseName = params.get('exercise') || 'Seated Knee Extension';
+const targetReps = parseInt(params.get('reps') || '12', 10);
+const targetRom = parseFloat(params.get('rom') || '120');
+const planId = params.get('plan') || 'plan001';
+const exerciseId = params.get('eid') || 'ex001';
+
+document.getElementById('exName').textContent = exerciseName;
+document.getElementById('exTarget').textContent = targetReps;
+document.getElementById('exRomTarget').textContent = targetRom;
+document.getElementById('painSlider').addEventListener('input', e => {
+  document.getElementById('painVal').textContent = e.target.value;
+});
+
+// Camera state: facingMode user = front, environment = back
+let facingMode = 'user'; // front
+let bodySide = 'right';
+let pose = null;
+let running = false;
+let animId = null;
+let stream = null;
+let reps = 0, maxRom = 0, avgRomSum = 0, avgRomCount = 0;
+let lastAngle = 180, goingUp = false, sessionStart = null, quality = '–';
+
+// Landmark indices for left/right
+const SIDE = {
+  left:  { hip: 23, knee: 25, ankle: 27, shoulder: 11, elbow: 13, wrist: 15 },
+  right: { hip: 24, knee: 26, ankle: 28, shoulder: 12, elbow: 14, wrist: 16 },
+};
+
+function setSide(side) {
+  bodySide = side;
+  document.getElementById('btnLeft').className = 'flex-1 py-2 rounded-lg text-sm ' + (side==='left'?'bg-violet-600':'bg-gray-700 hover:bg-gray-600');
+  document.getElementById('btnRight').className = 'flex-1 py-2 rounded-lg text-sm ' + (side==='right'?'bg-violet-600':'bg-gray-700 hover:bg-gray-600');
+}
+
+function angleBetween(a, b, c) {
+  const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+  let angle = Math.abs(radians * 180 / Math.PI);
+  if (angle > 180) angle = 360 - angle;
+  return angle;
+}
+
+function pickJoint(lm) {
+  const s = SIDE[bodySide];
+  const name = exerciseName.toLowerCase();
+  // choose joint by exercise type
+  if (name.includes('elbow') || name.includes('shoulder')) {
+    return { a: lm[s.shoulder], b: lm[s.elbow], c: lm[s.wrist], label: 'Elbow' };
+  }
+  if (name.includes('shoulder') && name.includes('abduction')) {
+    return { a: lm[s.hip], b: lm[s.shoulder], c: lm[s.elbow], label: 'Shoulder' };
+  }
+  // default knee
+  return { a: lm[s.hip], b: lm[s.knee], c: lm[s.ankle], label: 'Knee' };
+}
+
+function onResults(results) {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const video = document.getElementById('video');
+  if (canvas.width !== video.videoWidth) {
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+  }
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+  if (results.poseLandmarks) {
+    if (typeof drawConnectors === 'function' && typeof POSE_CONNECTIONS !== 'undefined') {
+      drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, { color: '#a78bfa', lineWidth: 3 });
+      drawLandmarks(ctx, results.poseLandmarks, { color: '#c4b5fd', lineWidth: 1, radius: 4 });
+    }
+    const j = pickJoint(results.poseLandmarks);
+    if (j.a && j.b && j.c && (j.b.visibility || 1) > 0.4) {
+      const ang = Math.round(angleBetween(j.a, j.b, j.c));
+      lastAngle = ang;
+      document.getElementById('mAngle').textContent = ang + '°';
+      if (ang > maxRom) maxRom = ang;
+      document.getElementById('mMaxRom').textContent = maxRom + '°';
+      avgRomSum += ang; avgRomCount++;
+
+      if (!goingUp && ang > 140) goingUp = true;
+      else if (goingUp && ang < 110) {
+        goingUp = false;
+        reps++;
+        document.getElementById('mReps').textContent = reps;
+        if (maxRom >= targetRom - 5) quality = 'Good';
+        else if (maxRom >= targetRom - 20) quality = 'Fair';
+        else quality = 'Compensating';
+        document.getElementById('mQuality').textContent = quality;
+        document.getElementById('feedback').textContent =
+          reps >= targetReps ? '✓ Target reached!' : `Rep ${reps} (${bodySide} ${j.label})`;
+      }
+    }
+  }
+  ctx.restore();
+}
+
+async function processFrame() {
+  if (!running || !pose) return;
+  const video = document.getElementById('video');
+  if (video.readyState >= 2) {
+    try { await pose.send({ image: video }); } catch (e) {}
+  }
+  animId = requestAnimationFrame(processFrame);
+}
+
+async function startCamera() {
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  document.getElementById('noCamera').style.display = 'none';
+  document.getElementById('feedback').textContent = 'Starting camera…';
+
+  // Stop previous stream
+  if (stream) stream.getTracks().forEach(t => t.stop());
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+  } catch (err) {
+    // fallback without ideal
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode },
+        audio: false,
+      });
+    } catch (err2) {
+      document.getElementById('noCamera').style.display = 'flex';
+      throw new Error('Camera not available: ' + (err2.message || err.message));
+    }
+  }
+
+  video.srcObject = stream;
+  await video.play();
+
+  // Mirror only front camera
+  if (facingMode === 'user') {
+    video.classList.remove('back-cam');
+    canvas.classList.remove('back-cam');
+  } else {
+    video.classList.add('back-cam');
+    canvas.classList.add('back-cam');
+  }
+  document.getElementById('camLabel').textContent = facingMode === 'user' ? 'Front' : 'Back';
+
+  if (typeof Pose === 'undefined') {
+    throw new Error('MediaPipe Pose failed to load');
+  }
+  if (!pose) {
+    pose = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+    pose.onResults(onResults);
+  }
+
+  running = true;
+  if (!sessionStart) sessionStart = Date.now();
+  document.getElementById('statusBadge').textContent = 'Live';
+  document.getElementById('statusBadge').className = 'text-xs px-2 py-1 rounded-full bg-emerald-600';
+  document.getElementById('btnStart').textContent = 'Stop Camera';
+  document.getElementById('btnFinish').disabled = false;
+  document.getElementById('feedback').textContent = `Camera live (${facingMode === 'user' ? 'Front' : 'Back'}) – ${bodySide} side`;
+  processFrame();
+}
+
+function stopCamera() {
+  running = false;
+  if (animId) { cancelAnimationFrame(animId); animId = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  document.getElementById('video').srcObject = null;
+  document.getElementById('statusBadge').textContent = 'Stopped';
+  document.getElementById('statusBadge').className = 'text-xs px-2 py-1 rounded-full bg-gray-700';
+  document.getElementById('btnStart').textContent = 'Start Camera';
+}
+
+async function switchCamera() {
+  facingMode = facingMode === 'user' ? 'environment' : 'user';
+  document.getElementById('camLabel').textContent = facingMode === 'user' ? 'Front' : 'Back';
+  if (running) {
+    // restart with new facing mode
+    const wasRunning = true;
+    stopCamera();
+    try { await startCamera(); } catch (e) { alert(e.message); }
+  }
+}
+
+function toggleSession() {
+  if (running) stopCamera();
+  else startCamera().catch(err => {
+    console.error(err);
+    alert('Camera error: ' + err.message);
+    document.getElementById('noCamera').style.display = 'flex';
+  });
+}
+
+async function finishSession() {
+  stopCamera();
+  const duration = sessionStart ? Math.round((Date.now() - sessionStart) / 1000) : 0;
+  const avgRom = avgRomCount ? Math.round(avgRomSum / avgRomCount) : 0;
+  const pain = parseInt(document.getElementById('painSlider').value, 10);
+  try {
+    await api.createSession({
+      plan_id: planId,
+      exercise_id: exerciseId,
+      exercise_name: exerciseName,
+      reps_completed: reps,
+      target_reps: targetReps,
+      sets_completed: 1,
+      max_rom: maxRom || lastAngle,
+      avg_rom: avgRom,
+      quality: quality === '–' ? 'Fair' : quality,
+      pain_score: pain,
+      duration_seconds: duration,
+      source: 'camera',
+    });
+    alert(`Session saved!\nSide: ${bodySide}\nCamera: ${facingMode==='user'?'Front':'Back'}\nReps: ${reps}/${targetReps}\nMax ROM: ${maxRom}°`);
+    window.location.href = '/patient';
+  } catch (e) {
+    alert('Failed to save: ' + e.message);
+  }
+}
+</script>
+{% endblock %}

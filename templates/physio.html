@@ -1,0 +1,384 @@
+{% extends "base.html" %}
+{% block title %}Physiotherapist Portal – PhysioFlex{% endblock %}
+{% block body %}
+<div class="min-h-screen flex flex-col bg-slate-50">
+  <nav class="bg-white border-b border-slate-200 sticky top-0 z-20">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center text-white font-bold">P</div>
+        <span class="font-semibold">PhysioFlex</span>
+        <span class="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Physiotherapist</span>
+        <span id="liveDot" class="text-xs text-slate-400">● …</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="userName" class="text-sm text-slate-600"></span>
+        <button onclick="logout()" class="text-sm text-slate-500">Sign out</button>
+        <button onclick="openComplaintModal()" class="text-sm text-red-500">Report</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="flex-1 max-w-7xl mx-auto w-full px-4 py-8">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+      <h1 class="text-2xl font-bold font-display">Physiotherapy Workspace</h1>
+      <div class="flex flex-wrap gap-2">
+        <button id="btnNewPlan" onclick="openPlanModal()" disabled class="btn-primary disabled:opacity-40">+ Rehab Plan</button>
+        <button onclick="openScheduleModal()" class="btn-secondary">Schedule alert</button>
+      </div>
+    </div>
+    <div id="liveFeed" class="mb-4 hidden"><div class="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2 text-sm" id="liveMsg"></div></div>
+
+    <div class="grid lg:grid-cols-3 gap-6">
+      <div class="space-y-6">
+        <div class="card p-5">
+          <h2 class="font-semibold mb-3">Patients</h2>
+          <div id="patientList" class="space-y-2"></div>
+        </div>
+        <div class="card p-5">
+          <h2 class="font-semibold mb-3">Doctor suggestions</h2>
+          <div id="suggestionList" class="space-y-2 text-sm">–</div>
+        </div>
+        <div class="card p-5">
+          <h2 class="font-semibold mb-3">All messages</h2>
+          <div id="phyInbox" class="space-y-2 text-sm max-h-72 overflow-y-auto">Loading…</div>
+        </div>
+      </div>
+
+      <div class="lg:col-span-2 space-y-6">
+        <div id="detailEmpty" class="card p-12 text-center text-slate-400">Select a patient to manage plans, notes and messages</div>
+        <div id="detailPanel" class="hidden space-y-6">
+          <div class="card p-5">
+            <h2 id="dName" class="text-xl font-semibold"></h2>
+            <p id="dCondition" class="text-sm text-slate-500 mt-1"></p>
+            <div class="grid grid-cols-4 gap-3 mt-4 text-sm">
+              <div><div class="text-xs text-slate-500">Pain</div><div id="dPain" class="font-semibold text-lg"></div></div>
+              <div><div class="text-xs text-slate-500">ROM</div><div id="dRom" class="font-semibold text-lg"></div></div>
+              <div><div class="text-xs text-slate-500">Adherence</div><div id="dAdherence" class="font-semibold text-lg"></div></div>
+              <div><div class="text-xs text-slate-500">Status</div><div id="dStatus" class="font-semibold text-lg"></div></div>
+            </div>
+          </div>
+
+          <div class="card p-5">
+            <h3 class="font-semibold mb-3">Message this patient</h3>
+            <div class="flex gap-2">
+              <input id="phyMsgInput" class="input flex-1" placeholder="Type a message to the patient…" />
+              <button onclick="sendPhyMsg()" class="btn-primary shrink-0">Send</button>
+            </div>
+            <p id="phyMsgStatus" class="text-xs text-slate-400 mt-2"></p>
+            <div id="phyPatientMsgs" class="mt-3 space-y-2 text-sm max-h-48 overflow-y-auto"></div>
+          </div>
+
+          <div class="card p-5">
+            <h3 class="font-semibold mb-3">Active rehab plans</h3>
+            <div id="dPlans" class="space-y-2 text-sm">–</div>
+          </div>
+
+          <div class="card p-5">
+            <h3 class="font-semibold mb-3">Sessions</h3>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead><tr class="text-left text-slate-500 border-b">
+                  <th class="pb-2 pr-3">Date</th><th class="pb-2 pr-3">Exercise</th><th class="pb-2 pr-3">Reps</th>
+                  <th class="pb-2 pr-3">ROM</th><th class="pb-2">Quality</th>
+                </tr></thead>
+                <tbody id="dSessions"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card p-5">
+            <h3 class="font-semibold mb-3">Clinical notes</h3>
+            <div id="dNotes" class="space-y-2 mb-3 max-h-40 overflow-y-auto"></div>
+            <div class="flex gap-2">
+              <input id="noteInput" class="input flex-1" placeholder="Add clinical note…" />
+              <button onclick="addNote()" class="btn-primary shrink-0">Add note</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="planModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+    <h3 class="font-semibold mb-3">Create rehab plan</h3>
+    <input id="planTitle" class="input mb-2" placeholder="Plan title" value="Rehab plan" />
+    <p class="text-xs text-slate-500 mb-2">Select exercises from catalog</p>
+    <div id="exercisePick" class="space-y-2 max-h-48 overflow-y-auto mb-3 text-sm"></div>
+    <div class="mt-3 flex gap-2 justify-end">
+      <button onclick="document.getElementById('planModal').classList.add('hidden')" class="btn-secondary">Cancel</button>
+      <button onclick="savePlan()" class="btn-primary">Save plan</button>
+    </div>
+  </div>
+</div>
+
+<div id="scheduleModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-2xl max-w-md w-full p-6">
+    <h3 class="font-semibold mb-3">Send schedule to patient</h3>
+    <input id="schTitle" class="input mb-2" value="Exercise session reminder" />
+    <select id="schType" class="input mb-2"><option value="exercise">Exercise</option><option value="checkup">Checkup</option><option value="visit">Visit</option></select>
+    <input id="schDt" type="datetime-local" class="input mb-2" />
+    <textarea id="schNotes" class="input" rows="2" placeholder="Notes"></textarea>
+    <div class="mt-3 flex gap-2 justify-end">
+      <button onclick="document.getElementById('scheduleModal').classList.add('hidden')" class="btn-secondary">Cancel</button>
+      <button onclick="submitSchedule()" class="btn-primary">Send</button>
+    </div>
+  </div>
+</div>
+
+<div id="complaintModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-2xl max-w-md w-full p-6">
+    <h3 class="font-semibold mb-4">Report / Complaint</h3>
+    <div class="space-y-3 text-sm">
+      <select id="cAgainstRole" class="input"><option value="doctor">Doctor</option><option value="patient">Patient</option><option value="other">Other</option></select>
+      <input id="cAgainstName" class="input" placeholder="Name (optional)" />
+      <input id="cSubject" class="input" placeholder="Subject *" />
+      <textarea id="cDesc" rows="3" class="input" placeholder="Description *"></textarea>
+    </div>
+    <div class="mt-5 flex gap-2 justify-end">
+      <button onclick="document.getElementById('complaintModal').classList.add('hidden')" class="btn-secondary">Cancel</button>
+      <button onclick="submitComplaint()" class="px-4 py-2 bg-red-600 text-white rounded-xl text-sm">Submit</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const user = requireAuth(['physiotherapist']);
+if (!user) throw new Error('auth');
+document.getElementById('userName').textContent = user.name;
+
+let selectedPatientId = null;
+let patients = [];
+let exercises = [];
+
+async function playVoice(msgId) {
+  try {
+    const data = await api.getVoiceAudio(msgId);
+    const bin = atob(data.audio_base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: data.mime || 'audio/webm' });
+    const url = URL.createObjectURL(blob);
+    new Audio(url).play();
+  } catch (e) {
+    alert('Cannot play voice: ' + e.message + '\n(Text transcript is still available.)');
+  }
+}
+
+function renderMsgList(msgs, boxId) {
+  const box = document.getElementById(boxId);
+  if (!box) return;
+  if (!msgs || !msgs.length) {
+    box.innerHTML = '<p class="text-slate-400 text-sm">No messages yet</p>';
+    return;
+  }
+  box.innerHTML = msgs.slice(0, 25).map(m => {
+    const playBtn = m.has_audio
+      ? `<button onclick="playVoice('${m.id}')" class="mt-1 text-xs text-brand-600 underline">▶ Play voice</button>`
+      : '';
+    return `<div class="border rounded-xl p-2.5 text-sm ${m.from_role==='patient'?'bg-amber-50 border-amber-100':'bg-white'}">
+      <div class="flex justify-between text-xs text-slate-500">
+        <span><b>${m.from_role}</b> → ${m.to_role}</span>
+        <span>${new Date(m.created_at).toLocaleString()}</span>
+      </div>
+      <div class="mt-1 font-medium">${m.transcript || '(voice note)'}</div>
+      ${playBtn}
+    </div>`;
+  }).join('');
+}
+
+function showLive(msg) {
+  document.getElementById('liveMsg').textContent = '🔔 ' + msg;
+  document.getElementById('liveFeed').classList.remove('hidden');
+  setTimeout(() => document.getElementById('liveFeed').classList.add('hidden'), 7000);
+}
+connectRealtime('physiotherapist', (msg) => {
+  document.getElementById('liveDot').textContent = '● live';
+  document.getElementById('liveDot').className = 'text-xs text-emerald-500';
+  if (msg.event) {
+    showLive(msg.message || msg.event);
+    loadInbox();
+    if (selectedPatientId) selectPatient(selectedPatientId);
+  }
+});
+
+async function load() {
+  const data = await api.physioDashboard();
+  patients = data.patients || [];
+  document.getElementById('patientList').innerHTML = patients.map(p => `
+    <button onclick="selectPatient('${p.id}')" class="w-full text-left px-3 py-3 rounded-xl border ${selectedPatientId===p.id?'bg-emerald-50 border-emerald-200':'border-transparent hover:bg-slate-50'}">
+      <div class="font-medium text-sm">${p.name}</div>
+      <div class="text-xs text-slate-500">${p.condition || ''}</div>
+    </button>
+  `).join('') || '<p class="text-sm text-slate-400">No patients</p>';
+  try { exercises = await api.getExercises(); } catch(e) { exercises = []; }
+  loadInbox();
+  loadSuggestions();
+}
+
+async function loadInbox() {
+  try {
+    const msgs = await api.getVoiceMessages();
+    renderMsgList(msgs, 'phyInbox');
+  } catch (e) {
+    document.getElementById('phyInbox').innerHTML = '<p class="text-red-500 text-sm">' + e.message + '</p>';
+  }
+}
+
+async function selectPatient(id) {
+  selectedPatientId = id;
+  document.getElementById('btnNewPlan').disabled = false;
+  await load();
+  const p = patients.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('detailEmpty').classList.add('hidden');
+  document.getElementById('detailPanel').classList.remove('hidden');
+  document.getElementById('dName').textContent = p.name;
+  document.getElementById('dCondition').textContent = p.condition || '';
+  document.getElementById('dPain').textContent = (p.current_pain ?? '–') + '/10';
+  document.getElementById('dRom').textContent = (p.current_rom ?? '–') + '°';
+  document.getElementById('dAdherence').textContent = (p.adherence_percent ?? '–') + '%';
+  document.getElementById('dStatus').textContent = p.status || 'active';
+
+  const [sessions, notes, plans, msgs] = await Promise.all([
+    api.getSessions(id), api.getNotes(id), api.getPlans(id), api.getVoiceMessages(),
+  ]);
+  document.getElementById('dSessions').innerHTML = sessions.slice(0, 10).map(s => `
+    <tr class="border-b border-slate-50">
+      <td class="py-2 pr-3">${s.date}</td><td class="py-2 pr-3">${s.exercise_name}</td>
+      <td class="py-2 pr-3">${s.reps_completed}/${s.target_reps}</td>
+      <td class="py-2 pr-3">${s.max_rom}°</td><td class="py-2">${s.quality}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="py-4 text-slate-400">No sessions</td></tr>';
+
+  document.getElementById('dNotes').innerHTML = notes.length
+    ? notes.map(n => `<div class="text-sm border-l-2 border-emerald-400 pl-3"><p>${n.content}</p><p class="text-xs text-slate-400">${n.author_role} · ${new Date(n.created_at).toLocaleString()}</p></div>`).join('')
+    : '<p class="text-slate-400 text-sm">No notes</p>';
+
+  document.getElementById('dPlans').innerHTML = (plans || []).length
+    ? plans.map(pl => `<div class="border rounded-lg p-2"><b>${pl.title}</b> (${pl.status})
+        <div class="text-xs text-slate-500">${(pl.exercises||[]).map(e=>e.name).join(', ')}</div></div>`).join('')
+    : '<p class="text-slate-400">No plans — create one</p>';
+
+  const related = msgs.filter(m =>
+    m.from_id === id || m.to_user_id === id ||
+    (m.from_role === 'patient' && m.to_role === 'physiotherapist') ||
+    (m.from_role === 'physiotherapist' && m.to_role === 'patient')
+  );
+  renderMsgList(related, 'phyPatientMsgs');
+}
+
+async function sendPhyMsg() {
+  if (!selectedPatientId) return alert('Select a patient first');
+  const input = document.getElementById('phyMsgInput');
+  const status = document.getElementById('phyMsgStatus');
+  if (!input.value.trim()) return;
+  status.textContent = 'Sending…';
+  try {
+    await api.createVoiceMessage({
+      to_role: 'patient',
+      to_user_id: selectedPatientId,
+      transcript: input.value.trim(),
+    });
+    input.value = '';
+    status.textContent = 'Sent to patient';
+    loadInbox();
+    selectPatient(selectedPatientId);
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+    alert('Send failed: ' + e.message);
+  }
+}
+
+async function addNote() {
+  if (!selectedPatientId) return alert('Select a patient first');
+  const input = document.getElementById('noteInput');
+  if (!input.value.trim()) return;
+  try {
+    await api.createNote(selectedPatientId, input.value.trim());
+    input.value = '';
+    selectPatient(selectedPatientId);
+  } catch (e) { alert('Note failed: ' + e.message); }
+}
+
+function openPlanModal() {
+  if (!selectedPatientId) return alert('Select a patient');
+  const box = document.getElementById('exercisePick');
+  box.innerHTML = (exercises || []).map(e => `
+    <label class="flex items-center gap-2 border rounded-lg px-2 py-2">
+      <input type="checkbox" value="${e.id}" data-name="${e.name}" class="exPick" />
+      <span>${e.name} <span class="text-xs text-slate-400">(${e.body_part || ''})</span></span>
+    </label>
+  `).join('') || '<p class="text-slate-400">No exercises in catalog</p>';
+  document.getElementById('planModal').classList.remove('hidden');
+  document.getElementById('planModal').classList.add('flex');
+}
+
+async function savePlan() {
+  const picks = [...document.querySelectorAll('.exPick:checked')];
+  if (!picks.length) return alert('Select at least one exercise');
+  const body = {
+    title: document.getElementById('planTitle').value || 'Rehab plan',
+    status: 'active',
+    exercises: picks.map(el => ({
+      exercise_id: el.value,
+      name: el.dataset.name,
+      sets: 3, reps: 12, target_rom: 120, frequency: 'Daily',
+    })),
+  };
+  try {
+    await api.createPlan(selectedPatientId, body);
+    document.getElementById('planModal').classList.add('hidden');
+    alert('Plan assigned — patient can start these exercises');
+    selectPatient(selectedPatientId);
+  } catch (e) { alert(e.message); }
+}
+
+function openScheduleModal() {
+  if (!selectedPatientId) return alert('Select a patient first');
+  document.getElementById('scheduleModal').classList.remove('hidden');
+  document.getElementById('scheduleModal').classList.add('flex');
+}
+async function submitSchedule() {
+  const dt = document.getElementById('schDt').value;
+  if (!dt) return alert('Pick date/time');
+  await api.createSchedule({
+    patient_id: selectedPatientId,
+    title: document.getElementById('schTitle').value || 'Schedule',
+    schedule_type: document.getElementById('schType').value,
+    datetime: dt,
+    notes: document.getElementById('schNotes').value,
+  });
+  alert('Schedule sent to patient');
+  document.getElementById('scheduleModal').classList.add('hidden');
+}
+
+async function loadSuggestions() {
+  try {
+    const list = await api.getSuggestions();
+    const filtered = selectedPatientId ? list.filter(s => s.patient_id === selectedPatientId) : list;
+    document.getElementById('suggestionList').innerHTML = filtered.length
+      ? filtered.map(s => `<div class="border rounded p-2"><div class="font-medium">${s.operation_type || 'Suggestion'}</div>
+          <div class="text-xs text-slate-500">Sessions: ${s.recommended_sessions} · ${(s.suggested_exercises||[]).join(', ')}</div></div>`).join('')
+      : '<span class="text-slate-400">No doctor suggestions</span>';
+  } catch(e) {}
+}
+
+function openComplaintModal() {
+  document.getElementById('complaintModal').classList.remove('hidden');
+  document.getElementById('complaintModal').classList.add('flex');
+}
+async function submitComplaint() {
+  const subject = document.getElementById('cSubject').value.trim();
+  const description = document.getElementById('cDesc').value.trim();
+  if (!subject || !description) return alert('Required');
+  await api.createComplaint({ against_role: document.getElementById('cAgainstRole').value, against_name: document.getElementById('cAgainstName').value, category: 'misconduct', subject, description, severity: 'medium' });
+  alert('Report submitted');
+  document.getElementById('complaintModal').classList.add('hidden');
+}
+
+load();
+setInterval(loadInbox, 12000);
+</script>
+{% endblock %}

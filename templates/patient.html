@@ -1,0 +1,425 @@
+{% extends "base.html" %}
+{% block title %}Patient Portal – PhysioFlex{% endblock %}
+{% block body %}
+<div class="min-h-screen flex flex-col">
+  <nav class="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-violet-700 flex items-center justify-center text-white font-bold shadow-sm">P</div>
+        <span class="font-semibold">PhysioFlex</span>
+        <span class="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">Patient</span>
+        <span id="liveDot" class="text-xs text-gray-400">● …</span>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap justify-end">
+        <select id="langSelect" onchange="setLang(this.value)" class="text-xs border rounded-lg px-2 py-1">
+          <option value="en">English</option>
+          <option value="hi">हिन्दी</option>
+          <option value="bn">বাংলা</option>
+          <option value="te">తెలుగు</option>
+          <option value="mr">मराठी</option>
+          <option value="ta">தமிழ்</option>
+          <option value="gu">ગુજરાતી</option>
+          <option value="kn">ಕನ್ನಡ</option>
+          <option value="ml">മലയാളം</option>
+          <option value="pa">ਪੰਜਾਬੀ</option>
+          <option value="or">ଓଡ଼ିଆ</option>
+          <option value="as">অসমীয়া</option>
+          <option value="ur">اردو</option>
+        </select>
+        <span id="userName" class="text-sm text-gray-600"></span>
+        <button onclick="logout()" class="text-sm text-gray-500" data-i18n="signout">Sign out</button>
+        <button onclick="openComplaintModal()" class="text-sm text-red-500">Report</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="flex-1 max-w-6xl mx-auto w-full px-4 py-8">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+      <h1 class="text-2xl font-bold" data-i18n="my_recovery">My Recovery</h1>
+      <div class="flex flex-wrap gap-2">
+        <button onclick="openAlertModal()" class="px-3 py-2 border border-amber-300 text-amber-700 rounded-lg text-sm" data-i18n="alert_clinician">Alert clinician</button>
+        <button onclick="openBookingModal()" class="px-3 py-2 border rounded-lg text-sm" data-i18n="book_live">Book live session</button>
+        <button onclick="openVoiceModal()" class="px-3 py-2 border rounded-lg text-sm" data-i18n="voice_msg">Voice message</button>
+      </div>
+    </div>
+
+    <div id="liveFeed" class="mb-4 hidden"><div class="bg-violet-50 border border-violet-200 rounded-lg px-4 py-2 text-sm" id="liveMsg"></div></div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+      <div class="card p-4"><div class="text-sm text-gray-500" data-i18n="pain">Pain</div><div id="statPain" class="text-2xl font-bold mt-1">–</div></div>
+      <div class="card p-4"><div class="text-sm text-gray-500">ROM</div><div id="statRom" class="text-2xl font-bold mt-1">–</div></div>
+      <div class="card p-4"><div class="text-sm text-gray-500" data-i18n="adherence">Adherence</div><div id="statAdherence" class="text-2xl font-bold mt-1">–</div></div>
+      <div class="card p-4"><div class="text-sm text-gray-500" data-i18n="eval_score">Eval. score</div><div id="statEval" class="text-2xl font-bold mt-1">–</div></div>
+    </div>
+
+    <div class="grid lg:grid-cols-2 gap-6">
+      <!-- Assigned exercises – SELECT & START -->
+      <div class="card p-5">
+        <h2 class="font-semibold mb-4" data-i18n="assigned_ex">Assigned exercises – select one to start</h2>
+        <div id="exerciseSelectList" class="space-y-2"></div>
+        <p id="noPlan" class="text-sm text-gray-400 hidden" data-i18n="no_plan">No active plan. Wait for your physiotherapist to assign exercises.</p>
+      </div>
+
+      <!-- Schedules & evaluation -->
+      <div class="space-y-6">
+        <div class="card p-5">
+          <h2 class="font-semibold mb-3" data-i18n="schedules">Schedules & visits</h2>
+          <div id="scheduleList" class="space-y-2 text-sm"></div>
+        </div>
+        <div class="card p-5">
+          <h2 class="font-semibold mb-3" data-i18n="progress_eval">Progress evaluation</h2>
+          <div id="evalBox" class="text-sm text-gray-600">–</div>
+        </div>
+        <div class="card p-5">
+          <h2 class="font-semibold mb-3">Messages inbox</h2>
+          <p class="text-xs text-slate-500 mb-2">Messages from your doctor & physiotherapist</p>
+          <div id="inboxList" class="space-y-2 text-sm max-h-56 overflow-y-auto"></div>
+        </div>
+        <div class="card p-5">
+          <h2 class="font-semibold mb-3" data-i18n="recent_sessions">Recent sessions</h2>
+          <div id="sessionList" class="space-y-2 text-sm"></div>
+        </div>
+        <div class="card p-5">
+          <h2 class="font-semibold mb-3">My messages</h2>
+          <div id="myMsgList" class="space-y-2 text-sm">–</div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Alert clinician -->
+<div id="alertModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-xl max-w-md w-full p-6">
+    <h3 class="font-semibold mb-3">Alert doctor / physiotherapist</h3>
+    <select id="aType" class="w-full mb-2 border rounded-lg px-3 py-2 text-sm">
+      <option value="pain">Pain</option>
+      <option value="abnormality">Abnormality</option>
+      <option value="emergency">Emergency</option>
+      <option value="general">General</option>
+    </select>
+    <select id="aSev" class="w-full mb-2 border rounded-lg px-3 py-2 text-sm">
+      <option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option>
+    </select>
+    <textarea id="aMsg" rows="3" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Describe the issue…"></textarea>
+    <div class="mt-3 flex gap-2 justify-end">
+      <button onclick="closeModals()" class="px-3 py-2 border rounded-lg text-sm">Cancel</button>
+      <button onclick="submitAlert()" class="px-3 py-2 bg-amber-600 text-white rounded-lg text-sm">Send alert</button>
+    </div>
+  </div>
+</div>
+
+<!-- Booking -->
+<div id="bookingModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-xl max-w-md w-full p-6">
+    <h3 class="font-semibold mb-3">Book live session</h3>
+    <select id="bRole" class="w-full mb-2 border rounded-lg px-3 py-2 text-sm">
+      <option value="physiotherapist">Physiotherapist</option>
+      <option value="doctor">Doctor</option>
+    </select>
+    <input id="bDt" type="datetime-local" class="w-full mb-2 border rounded-lg px-3 py-2 text-sm" />
+    <input id="bReason" class="w-full mb-2 border rounded-lg px-3 py-2 text-sm" placeholder="Reason" />
+    <textarea id="bNotes" rows="2" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Notes"></textarea>
+    <div class="mt-3 flex gap-2 justify-end">
+      <button onclick="closeModals()" class="px-3 py-2 border rounded-lg text-sm">Cancel</button>
+      <button onclick="submitBooking()" class="px-3 py-2 bg-violet-600 text-white rounded-lg text-sm">Request</button>
+    </div>
+  </div>
+</div>
+
+<!-- Voice -->
+<div id="voiceModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-xl max-w-md w-full p-6">
+    <h3 class="font-semibold mb-3">Voice message</h3>
+    <select id="vRole" class="w-full mb-2 border rounded-lg px-3 py-2 text-sm">
+      <option value="physiotherapist">To Physiotherapist</option>
+      <option value="doctor">To Doctor</option>
+    </select>
+    <p class="text-xs text-gray-500 mb-2">Record a short message (browser microphone).</p>
+    <div class="flex gap-2 mb-2">
+      <button id="btnRec" onclick="toggleRec()" class="px-3 py-2 bg-red-600 text-white rounded-lg text-sm">● Record</button>
+      <span id="recStatus" class="text-sm text-gray-500 self-center">Idle</span>
+    </div>
+    <textarea id="vTranscript" rows="2" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Or type a message / transcript"></textarea>
+    <div class="mt-3 flex gap-2 justify-end">
+      <button onclick="closeModals()" class="px-3 py-2 border rounded-lg text-sm">Cancel</button>
+      <button onclick="submitVoice()" class="px-3 py-2 bg-violet-600 text-white rounded-lg text-sm">Send</button>
+    </div>
+  </div>
+</div>
+
+<div id="complaintModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-xl max-w-md w-full p-6">
+    <h3 class="text-lg font-semibold mb-4">Report / Complaint</h3>
+    <div class="space-y-3 text-sm">
+      <select id="cAgainstRole" class="w-full px-3 py-2 border rounded-lg">
+        <option value="doctor">Doctor</option><option value="physiotherapist">Physiotherapist</option><option value="other">Other</option>
+      </select>
+      <input id="cAgainstName" class="w-full px-3 py-2 border rounded-lg" placeholder="Name (optional)" />
+      <select id="cCategory" class="w-full px-3 py-2 border rounded-lg">
+        <option value="misconduct">Misconduct</option><option value="negligence">Negligence</option>
+        <option value="harassment">Harassment</option><option value="privacy">Privacy</option><option value="other">Other</option>
+      </select>
+      <input id="cSubject" class="w-full px-3 py-2 border rounded-lg" placeholder="Subject *" />
+      <textarea id="cDesc" rows="3" class="w-full px-3 py-2 border rounded-lg" placeholder="Description *"></textarea>
+    </div>
+    <div class="mt-5 flex gap-2 justify-end">
+      <button onclick="closeModals()" class="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+      <button onclick="submitComplaint()" class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Submit</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const user = requireAuth(['patient']);
+if (!user) throw new Error('auth');
+document.getElementById('userName').textContent = user.name;
+
+const I18N = {
+  en: { signout:'Sign out', my_recovery:'My Recovery', alert_clinician:'Alert clinician', book_live:'Book live session', voice_msg:'Voice message', pain:'Pain', adherence:'Adherence', eval_score:'Eval. score', assigned_ex:'Assigned exercises – select one to start', no_plan:'No active plan.', schedules:'Schedules & visits', progress_eval:'Progress evaluation', recent_sessions:'Recent sessions', start:'Start' },
+  hi: { signout:'साइन आउट', my_recovery:'मेरी रिकवरी', alert_clinician:'चिकित्सक को अलर्ट', book_live:'लाइव सत्र बुक करें', voice_msg:'वॉइस संदेश', pain:'दर्द', adherence:'अनुपालन', eval_score:'मूल्यांकन', assigned_ex:'नियत व्यायाम – शुरू करने के लिए चुनें', no_plan:'कोई सक्रिय योजना नहीं।', schedules:'अनुसूची और विज़िट', progress_eval:'प्रगति मूल्यांकन', recent_sessions:'हाल के सत्र', start:'शुरू' },
+  bn: { signout:'সাইন আউট', my_recovery:'আমার পুনরুদ্ধার', alert_clinician:'চিকিৎসককে সতর্ক করুন', book_live:'লাইভ সেশন বুক', voice_msg:'ভয়েস বার্তা', pain:'ব্যথা', adherence:'আনুগত্য', eval_score:'মূল্যায়ন', assigned_ex:'নির্ধারিত ব্যায়াম – শুরু করতে বেছে নিন', no_plan:'কোনো সক্রিয় পরিকল্পনা নেই।', schedules:'সূচি ও ভিজিট', progress_eval:'অগ্রগতি মূল্যায়ন', recent_sessions:'সাম্প্রতিক সেশন', start:'শুরু' },
+  te: { signout:'సైన్ అవుట్', my_recovery:'నా రికవరీ', alert_clinician:'వైద్యునికి అలర్ట్', book_live:'లైవ్ సెషన్ బుక్', voice_msg:'వాయిస్ సందేశం', pain:'నొప్పి', adherence:'అనుసరణ', eval_score:'మూల్యాంకనం', assigned_ex:'కేటాయించిన వ్యాయామాలు – ప్రారంభించడానికి ఎంచుకోండి', no_plan:'క్రియాశీల ప్రణాళిక లేదు.', schedules:'షెడ్యూల్ & సందర్శనలు', progress_eval:'పురోగతి మూల్యాంకనం', recent_sessions:'ఇటీవలి సెషన్లు', start:'ప్రారంభం' },
+  ta: { signout:'வெளியேறு', my_recovery:'என் மீட்பு', alert_clinician:'மருத்துவருக்கு எச்சரிக்கை', book_live:'நேரடி அமர்வு முன்பதிவு', voice_msg:'குரல் செய்தி', pain:'வலி', adherence:'பின்பற்றுதல்', eval_score:'மதிப்பீடு', assigned_ex:'ஒதுக்கப்பட்ட பயிற்சிகள் – தொடங்க தேர்வு செய்யுங்கள்', no_plan:'செயலில் உள்ள திட்டம் இல்லை.', schedules:'அட்டவணை & வருகை', progress_eval:'முன்னேற்ற மதிப்பீடு', recent_sessions:'சமீபத்திய அமர்வுகள்', start:'தொடங்கு' },
+  mr: { signout:'साइन आउट', my_recovery:'माझे पुनर्वसन', alert_clinician:'वैद्यकीय अलर्ट', book_live:'लाइव्ह सत्र बुक', voice_msg:'व्हॉइस संदेश', pain:'वेदना', adherence:'पालन', eval_score:'मूल्यमापन', assigned_ex:'नियुक्त व्यायाम – सुरू करण्यासाठी निवडा', no_plan:'सक्रिय योजना नाही.', schedules:'वेळापत्रक आणि भेटी', progress_eval:'प्रगती मूल्यमापन', recent_sessions:'अलीकडील सत्रे', start:'सुरू' },
+  gu: { signout:'સાઇન આઉટ', my_recovery:'મારી રિકવરી', alert_clinician:'ચિકિત્સકને અલર્ટ', book_live:'લાઇવ સત્ર બુક', voice_msg:'વૉઇસ સંદેશ', pain:'પીડા', adherence:'પાલન', eval_score:'મૂલ્યાંકન', assigned_ex:'સોંપાયેલ કસરતો – શરૂ કરવા પસંદ કરો', no_plan:'કોઈ સક્રિય યોજના નથી.', schedules:'અનુસૂચિ અને મુલાકાત', progress_eval:'પ્રગતિ મૂલ્યાંકન', recent_sessions:'તાજેતરના સત્રો', start:'શરૂ' },
+  kn: { signout:'ಸೈನ್ ಔಟ್', my_recovery:'ನನ್ನ ಚೇತರಿಕೆ', alert_clinician:'ವೈದ್ಯರಿಗೆ ಅಲರ್ಟ್', book_live:'ಲೈವ್ ಸೆಷನ್ ಬುಕ್', voice_msg:'ಧ್ವನಿ ಸಂದೇಶ', pain:'ನೋವು', adherence:'ಅನುಸರಣೆ', eval_score:'ಮೌಲ್ಯಮಾಪನ', assigned_ex:'ನಿಯೋಜಿತ ವ್ಯಾಯಾಮಗಳು – ಪ್ರಾರಂಭಿಸಲು ಆಯ್ಕೆಮಾಡಿ', no_plan:'ಸಕ್ರಿಯ ಯೋಜನೆ ಇಲ್ಲ.', schedules:'ವೇಳಾಪಟ್ಟಿ ಮತ್ತು ಭೇಟಿ', progress_eval:'ಪ್ರಗತಿ ಮೌಲ್ಯಮಾಪನ', recent_sessions:'ಇತ್ತೀಚಿನ ಸೆಷನ್‌ಗಳು', start:'ಪ್ರಾರಂಭ' },
+  ml: { signout:'സൈൻ ഔട്ട്', my_recovery:'എന്റെ റെക്കവറി', alert_clinician:'ഡോക്ടറെ അലേർട്ട്', book_live:'ലൈവ് സെഷൻ ബുക്ക്', voice_msg:'വോയ്സ് സന്ദേശം', pain:'വേദന', adherence:'പാലനം', eval_score:'മൂല്യനിർണ്ണയം', assigned_ex:'നിയോഗിച്ച വ്യായാമങ്ങൾ – ആരംഭിക്കാൻ തിരഞ്ഞെടുക്കുക', no_plan:'സജീവ പദ്ധതിയില്ല.', schedules:'ഷെഡ്യൂളും സന്ദർശനങ്ങളും', progress_eval:'പുരോഗതി മൂല്യനിർണ്ണയം', recent_sessions:'സമീപകാല സെഷനുകൾ', start:'ആരംഭിക്കുക' },
+  pa: { signout:'ਸਾਈਨ ਆਉਟ', my_recovery:'ਮੇਰੀ ਰਿਕਵਰੀ', alert_clinician:'ਡਾਕਟਰ ਨੂੰ ਅਲਰਟ', book_live:'ਲਾਈਵ ਸੈਸ਼ਨ ਬੁੱਕ', voice_msg:'ਵੌਇਸ ਸੁਨੇਹਾ', pain:'ਦਰਦ', adherence:'ਪਾਲਣਾ', eval_score:'ਮੁਲਾਂਕਣ', assigned_ex:'ਨਿਰਧਾਰਤ ਕਸਰਤਾਂ – ਸ਼ੁਰੂ ਕਰਨ ਲਈ ਚੁਣੋ', no_plan:'ਕੋਈ ਸਰਗਰਮ ਯੋਜਨਾ ਨਹੀਂ।', schedules:'ਸਮਾਂ-ਸਾਰਣੀ ਅਤੇ ਮੁਲਾਕਾਤ', progress_eval:'ਤਰੱਕੀ ਮੁਲਾਂਕਣ', recent_sessions:'ਹਾਲੀਆ ਸੈਸ਼ਨ', start:'ਸ਼ੁਰੂ' },
+  or: { signout:'ସାଇନ୍ ଆଉଟ୍', my_recovery:'ମୋ ରିକଭରୀ', alert_clinician:'ଚିକିତ୍ସକଙ୍କୁ ଆଲର୍ଟ', book_live:'ଲାଇଭ୍ ସେସନ୍ ବୁକ୍', voice_msg:'ଭଏସ୍ ସନ୍ଦେଶ', pain:'ଯନ୍ତ୍ରଣା', adherence:'ଅନୁପାଳନ', eval_score:'ମୂଲ୍ୟାଙ୍କନ', assigned_ex:'ନ୍ୟସ୍ତ ବ୍ୟାୟାମ – ଆରମ୍ଭ କରିବାକୁ ବାଛନ୍ତୁ', no_plan:'କୌଣସି ସକ୍ରିୟ ଯୋଜନା ନାହିଁ।', schedules:'ସୂଚୀ ଏବଂ ଭ୍ରମଣ', progress_eval:'ପ୍ରଗତି ମୂଲ୍ୟାଙ୍କନ', recent_sessions:'ସାମ୍ପ୍ରତିକ ସେସନ୍', start:'ଆରମ୍ଭ' },
+  as: { signout:'ছাইন আউট', my_recovery:'মোৰ ৰিকভাৰী', alert_clinician:'চিকিৎসকক সতৰ্ক', book_live:'লাইভ ছেছন বুক', voice_msg:'ভইচ বাৰ্তা', pain:' বিষ', adherence:'অনুসৰণ', eval_score:'মূল্যায়ন', assigned_ex:'নিৰ্ধাৰিত ব্যায়াম – আৰম্ভ কৰিবলৈ বাছক', no_plan:'কোনো সক্ৰিয় পৰিকল্পনা নাই।', schedules:'সূচী আৰু ভ্ৰমণ', progress_eval:'অগ্ৰগতি মূল্যায়ন', recent_sessions:'শেহতীয়া ছেছন', start:'আৰম্ভ' },
+  ur: { signout:'سائن آؤٹ', my_recovery:'میری ریکوری', alert_clinician:'ڈاکٹر کو الرٹ', book_live:'لائیو سیشن بک', voice_msg:'صوتی پیغام', pain:'درد', adherence:'پابندی', eval_score:'تشخیص', assigned_ex:'مقررہ مشقیں – شروع کرنے کے لیے منتخب کریں', no_plan:'کوئی فعال منصوبہ نہیں۔', schedules:'شیڈول اور دورے', progress_eval:'پیشرفت کی تشخیص', recent_sessions:'حالیہ سیشن', start:'شروع' },
+};
+
+function setLang(code) {
+  localStorage.setItem('lang', code);
+  const dict = I18N[code] || I18N.en;
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const k = el.getAttribute('data-i18n');
+    if (dict[k]) el.textContent = dict[k];
+  });
+  window._startLabel = dict.start || 'Start';
+  load();
+}
+const savedLang = localStorage.getItem('lang') || 'en';
+document.getElementById('langSelect').value = savedLang;
+window._startLabel = (I18N[savedLang]||I18N.en).start;
+
+function showLive(msg) {
+  document.getElementById('liveMsg').textContent = '🔔 ' + msg;
+  document.getElementById('liveFeed').classList.remove('hidden');
+  setTimeout(() => document.getElementById('liveFeed').classList.add('hidden'), 7000);
+}
+connectRealtime('patient', (msg) => {
+  document.getElementById('liveDot').textContent = '● live';
+  document.getElementById('liveDot').className = 'text-xs text-emerald-500';
+  if (['schedule_created','plan_created','plan_updated','booking_updated','suggestion_created','voice_message','note_added'].includes(msg.event)) {
+    showLive(msg.message || msg.event);
+    load();
+  }
+});
+
+function closeModals() {
+  ['alertModal','bookingModal','voiceModal','complaintModal'].forEach(id => {
+    document.getElementById(id).classList.add('hidden');
+    document.getElementById(id).classList.remove('flex');
+  });
+}
+function openAlertModal() { document.getElementById('alertModal').classList.remove('hidden'); document.getElementById('alertModal').classList.add('flex'); }
+function openBookingModal() { document.getElementById('bookingModal').classList.remove('hidden'); document.getElementById('bookingModal').classList.add('flex'); }
+function openVoiceModal() { document.getElementById('voiceModal').classList.remove('hidden'); document.getElementById('voiceModal').classList.add('flex'); }
+function openComplaintModal() { document.getElementById('complaintModal').classList.remove('hidden'); document.getElementById('complaintModal').classList.add('flex'); }
+
+async function submitAlert() {
+  const message = document.getElementById('aMsg').value.trim();
+  if (!message) return alert('Message required');
+  await api.createPatientAlert({ alert_type: document.getElementById('aType').value, severity: document.getElementById('aSev').value, message });
+  alert('Alert sent to your care team');
+  closeModals();
+}
+async function submitBooking() {
+  const preferred_datetime = document.getElementById('bDt').value;
+  if (!preferred_datetime) return alert('Pick a date/time');
+  await api.createBooking({
+    with_role: document.getElementById('bRole').value,
+    preferred_datetime,
+    reason: document.getElementById('bReason').value,
+    notes: document.getElementById('bNotes').value,
+  });
+  alert('Live session requested');
+  closeModals();
+}
+
+let mediaRecorder = null, chunks = [], audioB64 = null;
+async function toggleRec() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    document.getElementById('btnRec').textContent = '● Record';
+    document.getElementById('recStatus').textContent = 'Processing…';
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    chunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const buf = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      audioB64 = btoa(binary);
+      document.getElementById('recStatus').textContent = 'Recorded (' + Math.round(blob.size/1024) + ' KB)';
+    };
+    mediaRecorder.start();
+    document.getElementById('btnRec').textContent = '■ Stop';
+    document.getElementById('recStatus').textContent = 'Recording…';
+  } catch (e) {
+    alert('Microphone error: ' + e.message);
+  }
+}
+async function submitVoice() {
+  const transcript = document.getElementById('vTranscript').value.trim();
+  if (!transcript && !audioB64) return alert('Record or type a message');
+  try {
+    await api.createVoiceMessage({
+      to_role: document.getElementById('vRole').value,
+      transcript: transcript || '(voice note)',
+      audio_base64: audioB64 || null,
+      duration_seconds: 0,
+    });
+    alert('Message sent to your care team');
+    audioB64 = null;
+    document.getElementById('vTranscript').value = '';
+    document.getElementById('recStatus').textContent = 'Idle';
+    closeModals();
+  } catch (e) {
+    alert('Send failed: ' + e.message + '\n\nTip: type a text message if recording fails.');
+  }
+}
+async function submitComplaint() {
+  const subject = document.getElementById('cSubject').value.trim();
+  const description = document.getElementById('cDesc').value.trim();
+  if (!subject || !description) return alert('Required');
+  await api.createComplaint({
+    against_role: document.getElementById('cAgainstRole').value,
+    against_name: document.getElementById('cAgainstName').value,
+    category: document.getElementById('cCategory').value,
+    subject, description, severity: 'medium',
+  });
+  alert('Report submitted');
+  closeModals();
+}
+
+
+async function playVoice(msgId) {
+  try {
+    const data = await api.getVoiceAudio(msgId);
+    const bin = atob(data.audio_base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: data.mime || 'audio/webm' });
+    new Audio(URL.createObjectURL(blob)).play();
+  } catch (e) {
+    alert('Cannot play voice: ' + e.message);
+  }
+}
+
+async function load() {
+  const data = await api.patientDashboard();
+  const p = data.patient;
+  if (!p) return;
+  document.getElementById('statPain').textContent = (p.current_pain ?? '–') + '/10';
+  document.getElementById('statRom').textContent = (p.current_rom ?? '–') + '°';
+  document.getElementById('statAdherence').textContent = (p.adherence_percent ?? '–') + '%';
+
+  // Assigned exercises from all active plans
+  const plans = data.active_plans || [];
+  const list = document.getElementById('exerciseSelectList');
+  const exercises = [];
+  plans.forEach(pl => (pl.exercises || []).forEach(e => exercises.push({ ...e, plan_id: pl.id, plan_title: pl.title })));
+  if (!exercises.length) {
+    list.innerHTML = '';
+    document.getElementById('noPlan').classList.remove('hidden');
+  } else {
+    document.getElementById('noPlan').classList.add('hidden');
+    const startL = window._startLabel || 'Start';
+    list.innerHTML = exercises.map(e => `
+      <div class="flex items-center justify-between gap-3 border rounded-lg px-3 py-3 hover:bg-violet-50">
+        <div>
+          <div class="font-medium text-sm">${e.name}</div>
+          <div class="text-xs text-gray-500">${e.sets || 3}×${e.reps || 10} · target ${e.target_rom || 90}° · ${e.frequency || 'Daily'}</div>
+          <div class="text-xs text-gray-400">${e.plan_title || ''}</div>
+        </div>
+        <a class="shrink-0 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-medium hover:bg-violet-700"
+           href="/patient/exercise?exercise=${encodeURIComponent(e.name)}&reps=${e.reps||10}&rom=${e.target_rom||90}&plan=${e.plan_id}&eid=${e.exercise_id}">
+          ${startL}
+        </a>
+      </div>
+    `).join('');
+  }
+
+  try {
+    const msgs = await api.getVoiceMessages();
+    const inbox = document.getElementById('inboxList');
+    if (inbox) {
+      inbox.innerHTML = msgs.length ? msgs.map(m => `
+        <div class="border rounded-lg p-2 ${m.from_role==='patient'?'bg-violet-50/50':'bg-emerald-50/50'}">
+          <div class="flex justify-between text-xs text-slate-500">
+            <span><b>${m.from_role}</b> → ${m.to_role}</span>
+            <span>${new Date(m.created_at).toLocaleString()}</span>
+          </div>
+          <div class="mt-1">${m.transcript || '(voice note)'}</div>
+          ${m.has_audio ? '<button onclick="playVoice(\''+m.id+'\')" class="text-xs text-brand-600 underline">▶ Play voice</button>' : ''}
+        </div>
+      `).join('') : '<p class="text-slate-400">No messages yet</p>';
+    }
+  } catch(e) {}
+  document.getElementById('sessionList').innerHTML = (data.recent_sessions || []).slice(0, 8).map(s => `
+    <div class="flex justify-between border-b border-gray-50 py-2">
+      <div><div class="font-medium">${s.exercise_name}</div><div class="text-xs text-gray-500">${s.date} · ${s.quality}</div></div>
+      <div class="text-xs text-right text-gray-500">${s.reps_completed}/${s.target_reps}<br>${s.max_rom}°</div>
+    </div>
+  `).join('') || '<p class="text-gray-400">No sessions yet</p>';
+
+  try {
+    const [schedules, evaluation] = await Promise.all([
+      api.getSchedules(),
+      api.getEvaluation(p.id),
+    ]);
+    document.getElementById('scheduleList').innerHTML = schedules.length ? schedules.slice(0, 8).map(s => `
+      <div class="border-l-2 border-violet-400 pl-3 py-1">
+        <div class="font-medium">${s.title}</div>
+        <div class="text-xs text-gray-500">${s.schedule_type} · ${s.datetime} · by ${s.created_by_role}</div>
+        ${s.notes ? `<div class="text-xs text-gray-600">${s.notes}</div>` : ''}
+      </div>
+    `).join('') : '<p class="text-gray-400">No schedules yet</p>';
+
+    document.getElementById('statEval').textContent = evaluation.score;
+    document.getElementById('evalBox').innerHTML = `
+      <div class="font-medium text-gray-900 mb-1">${evaluation.evaluation}</div>
+      <div class="grid grid-cols-2 gap-2 text-xs mb-2">
+        <div>ROM Δ: ${evaluation.rom_improvement}°</div>
+        <div>Pain: ${evaluation.pain_trend}</div>
+        <div>Sessions: ${evaluation.session_count}</div>
+        <div>Quality: ${(evaluation.good_quality_ratio*100).toFixed(0)}% good</div>
+      </div>
+      <ul class="list-disc pl-4 text-xs">${(evaluation.recommendations||[]).map(r => `<li>${r}</li>`).join('')}</ul>
+    `;
+  } catch (e) {
+    console.warn(e);
+  }
+  try {
+    const msgs = await api.getVoiceMessages();
+    document.getElementById('myMsgList').innerHTML = msgs.length
+      ? msgs.slice(0, 8).map(m => `<div class="border-l-2 border-violet-400 pl-2"><div class="text-xs text-gray-500">${m.from_role} → ${m.to_role}</div>${m.transcript || '(voice)'}</div>`).join('')
+      : '<span class="text-gray-400">No messages yet</span>';
+  } catch(e) {}
+}
+
+setLang(savedLang);
+</script>
+{% endblock %}

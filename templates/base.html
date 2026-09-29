@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}PhysioFlex{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50:'#eef7ff',100:'#d9ecff',200:'#bcdeff',300:'#8ecaff',
+              400:'#59adff',500:'#338bff',600:'#1a6bf5',700:'#1355e1',
+              800:'#1645b6',900:'#183c8f',950:'#132657'
+            },
+            slate: { 850: '#1a2332' }
+          },
+          fontFamily: {
+            sans: ['DM Sans', 'system-ui', 'sans-serif'],
+            display: ['Outfit', 'system-ui', 'sans-serif'],
+          },
+          boxShadow: {
+            soft: '0 4px 24px -4px rgba(15, 23, 42, 0.08)',
+            card: '0 1px 3px rgba(15,23,42,0.04), 0 8px 24px -8px rgba(15,23,42,0.08)',
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'DM Sans', system-ui, sans-serif; }
+    .font-display { font-family: 'Outfit', system-ui, sans-serif; }
+    .card { @apply bg-white rounded-2xl border border-slate-100/80 shadow-card; }
+    .btn-primary { @apply px-5 py-2.5 bg-brand-600 text-white rounded-xl text-sm font-semibold hover:bg-brand-700 transition shadow-sm shadow-brand-600/20; }
+    .btn-secondary { @apply px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl text-sm font-semibold hover:bg-slate-50 transition; }
+    .input { @apply w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 outline-none transition bg-white; }
+    .glass { backdrop-filter: blur(12px); background: rgba(255,255,255,0.85); }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen antialiased">
+  {% block body %}{% endblock %}
+  <script src="/static/js/api.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

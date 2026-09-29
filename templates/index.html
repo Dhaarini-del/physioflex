@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}PhysioFlex – Intelligent Physiotherapy Platform{% endblock %}
+{% block body %}
+<div class="min-h-screen flex flex-col">
+  <nav class="glass sticky top-0 z-30 border-b border-slate-200/60">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between">
+      <div class="flex items-center gap-2.5">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-white font-display font-bold shadow-md shadow-brand-600/30">P</div>
+        <span class="font-display font-semibold text-lg tracking-tight">PhysioFlex</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="#features" class="hidden sm:inline text-sm text-slate-600 hover:text-slate-900">Features</a>
+        <a href="#how" class="hidden sm:inline text-sm text-slate-600 hover:text-slate-900">How it works</a>
+        <a href="/login" class="btn-primary">Sign in</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="relative overflow-hidden">
+    <div class="absolute inset-0 bg-gradient-to-br from-brand-50 via-white to-slate-50"></div>
+    <div class="absolute top-20 right-0 w-[480px] h-[480px] bg-brand-200/30 rounded-full blur-3xl"></div>
+    <div class="relative max-w-6xl mx-auto px-4 sm:px-6 py-16 md:py-24 grid md:grid-cols-2 gap-12 items-center">
+      <div>
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-100 text-brand-700 text-xs font-semibold mb-5">
+          <span class="w-1.5 h-1.5 rounded-full bg-brand-500 animate-pulse"></span>
+          AI · IoT · Clinical supervision
+        </div>
+        <h1 class="font-display text-4xl md:text-5xl font-bold text-slate-900 leading-[1.15] tracking-tight">
+          Connected care for<br>
+          <span class="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 to-brand-400">every recovery journey</span>
+        </h1>
+        <p class="mt-5 text-lg text-slate-600 leading-relaxed max-w-md">
+          PhysioFlex unites doctors, physiotherapists and patients with camera-guided exercise, progress analytics and secure role-based portals.
+        </p>
+        <div class="mt-8 flex flex-wrap gap-3">
+          <a href="/login" class="btn-primary text-base px-6 py-3">Access your portal</a>
+          <a href="#features" class="btn-secondary text-base px-6 py-3">Explore features</a>
+        </div>
+        <div class="mt-10 flex gap-8 text-sm">
+          <div><div class="font-display text-2xl font-bold text-slate-900">3</div><div class="text-slate-500">Role portals</div></div>
+          <div><div class="font-display text-2xl font-bold text-slate-900">AI</div><div class="text-slate-500">Pose analysis</div></div>
+          <div><div class="font-display text-2xl font-bold text-slate-900">Live</div><div class="text-slate-500">Progress sync</div></div>
+        </div>
+      </div>
+      <div class="relative">
+        <div class="rounded-3xl overflow-hidden shadow-2xl shadow-slate-900/15 ring-1 ring-slate-200/80">
+          <img src="https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=800&q=80" alt="Physiotherapy session" class="w-full h-72 md:h-80 object-cover" />
+        </div>
+        <div class="absolute -bottom-6 -left-4 md:left-6 bg-white rounded-2xl shadow-card p-4 border border-slate-100 max-w-[220px]">
+          <div class="text-xs text-slate-500 mb-1">Live session</div>
+          <div class="font-semibold text-sm">Knee extension</div>
+          <div class="mt-2 flex justify-between text-center">
+            <div><div class="text-lg font-bold text-brand-600">118°</div><div class="text-[10px] text-slate-400">Angle</div></div>
+            <div><div class="text-lg font-bold text-emerald-600">8/12</div><div class="text-[10px] text-slate-400">Reps</div></div>
+            <div><div class="text-lg font-bold text-amber-600">Good</div><div class="text-[10px] text-slate-400">Quality</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features" class="py-20 bg-white border-y border-slate-100">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6">
+      <div class="text-center mb-12">
+        <h2 class="font-display text-3xl font-bold text-slate-900">Built for clinical teams</h2>
+        <p class="mt-2 text-slate-500 max-w-xl mx-auto">Independent portals, shared truth — every update reaches the right clinician in real time.</p>
+      </div>
+      <div class="grid md:grid-cols-3 gap-6">
+        <div class="card p-6 group hover:shadow-lg transition">
+          <div class="w-12 h-12 rounded-2xl overflow-hidden mb-4">
+            <img src="https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=200&q=80" alt="" class="w-full h-full object-cover" />
+          </div>
+          <h3 class="font-display font-semibold text-lg">Doctor portal</h3>
+          <p class="mt-2 text-sm text-slate-500 leading-relaxed">Supervise recovery, review evaluations, schedule visits and share operation notes with physiotherapy.</p>
+        </div>
+        <div class="card p-6 group hover:shadow-lg transition">
+          <div class="w-12 h-12 rounded-2xl overflow-hidden mb-4">
+            <img src="https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?w=200&q=80" alt="" class="w-full h-full object-cover" />
+          </div>
+          <h3 class="font-display font-semibold text-lg">Physiotherapist portal</h3>
+          <p class="mt-2 text-sm text-slate-500 leading-relaxed">Assess patients, assign dataset-backed exercises, monitor adherence and send schedule alerts.</p>
+        </div>
+        <div class="card p-6 group hover:shadow-lg transition">
+          <div class="w-12 h-12 rounded-2xl overflow-hidden mb-4">
+            <img src="https://images.unsplash.com/photo-1518611012118-696072aa579a?w=200&q=80" alt="" class="w-full h-full object-cover" />
+          </div>
+          <h3 class="font-display font-semibold text-lg">Patient portal</h3>
+          <p class="mt-2 text-sm text-slate-500 leading-relaxed">Follow your plan, train with camera feedback, alert your care team and track progress in your language.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how" class="py-16">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 grid md:grid-cols-2 gap-10 items-center">
+      <img src="https://images.unsplash.com/photo-1579684385127-1ef15d508118?w=700&q=80" alt="Rehab" class="rounded-3xl shadow-card object-cover h-64 w-full" />
+      <div>
+        <h2 class="font-display text-2xl font-bold mb-4">Secure by design</h2>
+        <ul class="space-y-3 text-slate-600 text-sm">
+          <li class="flex gap-2"><span class="text-brand-600 font-bold">✓</span> Role-based access — admin issues credentials</li>
+          <li class="flex gap-2"><span class="text-brand-600 font-bold">✓</span> Real-time session and alert broadcasting</li>
+          <li class="flex gap-2"><span class="text-brand-600 font-bold">✓</span> Clinical decision support, not autonomous diagnosis</li>
+          <li class="flex gap-2"><span class="text-brand-600 font-bold">✓</span> Misconduct reporting to platform administrators</li>
+        </ul>
+        <a href="/login" class="inline-block mt-6 btn-primary">Sign in to continue</a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="border-t border-slate-200 py-8 text-center text-sm text-slate-400">
+    <div class="font-display font-semibold text-slate-600 mb-1">PhysioFlex</div>
+    Intelligent physiotherapy under qualified clinical supervision · © 2026
+  </footer>
+</div>
+{% endblock %}
