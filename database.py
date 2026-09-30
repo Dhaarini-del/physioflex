@@ -104,12 +104,24 @@ def _mongo_load() -> Dict[str, Any]:
 
 def _mongo_save(data: Dict[str, Any]) -> None:
     db = _get_mongo_db()
+
     for collection in COLLECTIONS:
         coll = db[collection]
         coll.delete_many({})
+
         rows = data.get(collection) or []
+
         if rows:
-            coll.insert_many(rows, ordered=False)
+            # Use copies so PyMongo does not add ObjectId values
+            # to the dictionaries used by the API response.
+            clean_rows = []
+
+            for row in rows:
+                document = dict(row)
+                document.pop("_id", None)
+                clean_rows.append(document)
+
+            coll.insert_many(clean_rows, ordered=False)
 
 
 def get_db() -> Dict[str, Any]:
