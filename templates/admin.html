@@ -147,12 +147,32 @@ async function load() {
             <div class="font-medium">${c.patient_name || 'Patient'}</div>
             <div class="text-xs text-slate-500">By ${c.requested_by_role || '–'} · ${c.email || 'no email'}</div>
           </div>
-          <button onclick="provision('${c.id}','${(c.email||'').replace(/'/g,'')}')" class="px-3 py-1.5 bg-slate-800 text-white rounded-lg text-xs">Issue login</button>
+          <div class="flex gap-2">
+            <button onclick="provision('${c.id}','${(c.email||'').replace(/'/g,'')}')" class="px-3 py-1.5 bg-slate-800 text-white rounded-lg text-xs">Issue login</button>
+            <button onclick="rejectCredentialRequest('${c.id}','${(c.patient_name||'Patient').replace(/'/g,'')}')" class="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg text-xs hover:bg-red-200">Reject</button>
+          </div>
         </div>`).join('')
       : '<p class="text-slate-400">No pending requests</p>';
   } catch (e) {
     console.error(e);
     document.getElementById('credList').innerHTML = '<p class="text-red-500">Error: ' + e.message + '</p>';
+  }
+}
+
+async function rejectCredentialRequest(reqId, patientName) {
+  const confirmed = confirm(
+    'Reject login request for ' + patientName + '?\\n\\n' +
+    'The patient clinical record will remain, but the login request will be removed.'
+  );
+
+  if (!confirmed) return;
+
+  try {
+    await api.deleteCredentialRequest(reqId);
+    alert('Login request rejected successfully.');
+    load();
+  } catch (e) {
+    alert('Failed to reject login request: ' + e.message);
   }
 }
 
