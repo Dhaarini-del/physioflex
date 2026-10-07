@@ -760,6 +760,62 @@ async def provision_credentials(req_id: str, body: ProvisionCredentials, user: T
     return {"ok": True, "user": {k: v for k, v in new_user.items() if k != "password"}, "temp_password": body.password}
 
 
+@app.delete("/api/admin/credential-requests/{req_id}")
+async def delete_credential_request(
+    req_id: str,
+    user: TokenData = Depends(require_role("admin")),
+):
+    """Admin rejects/removes a pending patient login credential request.
+
+    The patient's clinical record is kept. Only the pending credential
+    request is removed, and the patient is marked as credential_rejected.
+    """
+    db = get_db()
+    requests = db.get("credential_requests", [])
+
+    req = next((r for r in requests if r.get("id") == req_id), None)
+    if not req:
+        raise HTTPException(status_code=404, detail="Credential request not found")
+
+    if req.get("status") != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail="Only pending credential requests can be rejected",
+        )
+
+    patient_id = req.get("patient_id")
+
+    # Remove only the credential request.
+    db["credential_requests"] = [
+        r for r in requests
+        if r.get("id") != req_id
+    ]
+
+    # Keep the patient clinical record, but mark the login request as rejected.
+    if patient_id:
+        for patient in db.get("patients", []):
+            if patient.get("id") == patient_id:
+                patient["status"] = "credential_rejected"
+                patient["updated_at"] = _now()
+                break
+
+    save_db(db)
+
+    await manager.broadcast_roles(["admin", "doctor", "physiotherapist"], {
+        "event": "credential_request_deleted",
+        "patient_id": patient_id,
+        "request_id": req_id,
+        "message": f"Login request for {req.get('patient_name', 'patient')} was rejected by admin.",
+    })
+
+    return {
+        "ok": True,
+        "deleted": req_id,
+        "patient_id": patient_id,
+        "message": "Credential request rejected successfully",
+    }
+
+
 # ---------- Admin: user CRUD ----------
 class AdminUserCreate(BaseModel):
     email: str
