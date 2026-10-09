@@ -3,7 +3,6 @@
 {% block body %}
 <div class="min-h-screen flex flex-col">
   <nav class="bg-white border-b border-gray-200 sticky top-0 z-10">
-    <a href="/chat" class="smart-chat-link">💬 Smart Chat</a>
     <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-3">
         <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-violet-700 flex items-center justify-center text-white font-bold shadow-sm">P</div>
@@ -422,5 +421,7 @@ async function load() {
 }
 
 setLang(savedLang);
+<link rel="stylesheet" href="/static/chat-widget.css">
+<script src="/static/chat-widget.js" defer></script>
 </script>
 {% endblock %}
