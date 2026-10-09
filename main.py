@@ -1461,3 +1461,8 @@ async def admin_portal(request: Request):
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "PhysioFlex", "version": "1.1.0"}
+
+
+# Register the separate Smart Chat router.
+from chat_routes import router as chat_router
+app.include_router(chat_router)
