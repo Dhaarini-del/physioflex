@@ -451,18 +451,24 @@ async function submitComplaint() {
   alert('Report submitted');
   document.getElementById('complaintModal').classList.add('hidden');
 }
+
 async function sendPatientMsg() {
   if (!selectedPatientId) return alert('Select a patient first');
+
   const input = document.getElementById('msgInput');
   const status = document.getElementById('msgStatus');
+
   if (!input.value.trim()) return;
+
   status.textContent = 'Sending…';
+
   try {
     await api.createVoiceMessage({
       to_role: 'patient',
       to_user_id: selectedPatientId,
       transcript: input.value.trim(),
     });
+
     input.value = '';
     status.textContent = 'Sent to patient';
     selectPatient(selectedPatientId);
@@ -470,8 +476,10 @@ async function sendPatientMsg() {
     status.textContent = 'Failed: ' + e.message;
   }
 }
+
 load();
-  <link rel="stylesheet" href="/static/chat-widget.css">
-<script src="/static/chat-widget.js" defer></script>
 </script>
+
+<link rel="stylesheet" href="/static/chat-widget.css">
+<script src="/static/chat-widget.js" defer></script>
 {% endblock %}
