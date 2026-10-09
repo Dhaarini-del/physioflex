@@ -1,0 +1,134 @@
+
+#physio-chat-launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 99999;
+  width: 62px;
+  height: 62px;
+  border: 0;
+  border-radius: 50%;
+  background: #7138ed;
+  color: white;
+  font-size: 27px;
+  cursor: pointer;
+  box-shadow: 0 6px 22px #0003;
+}
+
+#physio-chat-panel {
+  position: fixed;
+  right: 24px;
+  bottom: 98px;
+  z-index: 99999;
+  width: 360px;
+  height: 490px;
+  max-height: calc(100dvh - 125px);
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  box-shadow: 0 12px 40px #0003;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: Arial, sans-serif;
+}
+
+#physio-chat-panel.open {
+  display: flex;
+}
+
+.physio-chat-header {
+  padding: 16px;
+  background: #7138ed;
+  color: white;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.physio-chat-header button {
+  background: transparent;
+  border: 0;
+  color: white;
+  font-size: 23px;
+  cursor: pointer;
+}
+
+#physio-chat-messages {
+  flex: 1;
+  padding: 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #f8fafc;
+}
+
+.physio-chat-bubble {
+  max-width: 85%;
+  padding: 10px 12px;
+  border-radius: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.physio-chat-bubble.bot {
+  background: white;
+  border: 1px solid #e5e7eb;
+  align-self: flex-start;
+}
+
+.physio-chat-bubble.user {
+  background: #7138ed;
+  color: white;
+  align-self: flex-end;
+}
+
+.physio-chat-form {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid #e5e7eb;
+  background: white;
+}
+
+#physio-chat-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 10px;
+  font: inherit;
+}
+
+#physio-chat-send {
+  border: 0;
+  border-radius: 10px;
+  padding: 0 15px;
+  background: #7138ed;
+  color: white;
+  cursor: pointer;
+}
+
+#physio-chat-send:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+@media (max-width: 480px) {
+  #physio-chat-launcher {
+    right: 16px;
+    bottom: 16px;
+  }
+
+  #physio-chat-panel {
+    right: 10px;
+    bottom: 88px;
+    width: calc(100vw - 20px);
+    height: min(490px, calc(100dvh - 110px));
+    max-height: calc(100dvh - 110px);
+  }
+}
