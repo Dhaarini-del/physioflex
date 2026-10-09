@@ -1,0 +1,71 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PhysioFlex | Smart Chat</title>
+  <link rel="stylesheet" href="/static/css/chat.css">
+</head>
+<body>
+  <main class="chat-app">
+    <header class="chat-header">
+      <div class="brand-icon">✚</div>
+      <div>
+        <h1>PhysioFlex Smart Chat</h1>
+        <p>Rehabilitation guidance and recovery support</p>
+      </div>
+      <a class="back-link" href="/">Home</a>
+    </header>
+
+    <section class="notice">
+      <strong>Health reminder:</strong>
+      This assistant provides general information, not a diagnosis.
+      Follow your clinician-approved rehabilitation plan.
+    </section>
+
+    <section class="chat-panel">
+      <div id="chatMessages" class="messages" aria-live="polite">
+        <div class="message assistant">
+          <div class="bubble">
+            Hello! I'm your PhysioFlex assistant. How can I help with your
+            rehabilitation questions today?
+          </div>
+        </div>
+      </div>
+
+      <div id="chatStatus" class="status" role="status"></div>
+
+      <form id="chatForm" class="chat-form">
+        <textarea
+          id="chatInput"
+          rows="2"
+          maxlength="2000"
+          placeholder="Ask about your rehabilitation..."
+          aria-label="Your message"
+          required
+        ></textarea>
+
+        <div class="chat-actions">
+          <button id="voiceButton" type="button" class="secondary">
+            🎙 Voice input
+          </button>
+          <button id="speakToggle" type="button" class="secondary">
+            🔊 Read replies
+          </button>
+          <button id="sendButton" type="submit" class="send-button">
+            Send
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <p class="footer-note">
+      If pain is severe or worsening, stop the exercise and contact your
+      healthcare professional. Seek emergency help for urgent symptoms.
+    </p>
+  </main>
+
+  <script src="/static/js/chat.js" defer></script>
+</body>
+</html>
