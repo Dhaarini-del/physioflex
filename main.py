@@ -11,7 +11,10 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import asyncio
+import json
 import os
+from urllib.request import Request as URLRequest, urlopen
+from urllib.error import URLError, HTTPError
 from pathlib import Path
 
 from database import get_db, save_db, generate_id, seed_if_empty, _now, append_event
@@ -765,33 +768,30 @@ async def delete_credential_request(
     req_id: str,
     user: TokenData = Depends(require_role("admin")),
 ):
-    """Admin rejects/removes a pending patient login credential request.
+    """
+    Admin rejects/removes a pending patient login credential request.
 
-    The patient's clinical record is kept. Only the pending credential
-    request is removed, and the patient is marked as credential_rejected.
+    The credential request is deleted, but the patient's clinical record
+    remains in the database. The patient is marked as credential_rejected
+    so the clinical record is preserved without creating a login account.
     """
     db = get_db()
-    requests = db.get("credential_requests", [])
 
+    requests = db.get("credential_requests", [])
     req = next((r for r in requests if r.get("id") == req_id), None)
+
     if not req:
         raise HTTPException(status_code=404, detail="Credential request not found")
 
-    if req.get("status") != "pending":
-        raise HTTPException(
-            status_code=400,
-            detail="Only pending credential requests can be rejected",
-        )
-
-    patient_id = req.get("patient_id")
-
-    # Remove only the credential request.
+    # Remove only the login request. Do NOT delete the patient record.
     db["credential_requests"] = [
         r for r in requests
         if r.get("id") != req_id
     ]
 
-    # Keep the patient clinical record, but mark the login request as rejected.
+    patient_id = req.get("patient_id")
+
+    # Keep the clinical patient record and update its credential status.
     if patient_id:
         for patient in db.get("patients", []):
             if patient.get("id") == patient_id:
@@ -801,12 +801,18 @@ async def delete_credential_request(
 
     save_db(db)
 
-    await manager.broadcast_roles(["admin", "doctor", "physiotherapist"], {
-        "event": "credential_request_deleted",
-        "patient_id": patient_id,
-        "request_id": req_id,
-        "message": f"Login request for {req.get('patient_name', 'patient')} was rejected by admin.",
-    })
+    await manager.broadcast_roles(
+        ["admin", "doctor", "physiotherapist"],
+        {
+            "event": "credential_request_deleted",
+            "patient_id": patient_id,
+            "request_id": req_id,
+            "message": (
+                f"Login request for "
+                f"{req.get('patient_name', 'patient')} was rejected by admin."
+            ),
+        },
+    )
 
     return {
         "ok": True,
@@ -1453,6 +1459,13 @@ async def exercise_page(request: Request):
     return templates.TemplateResponse(request, "exercise.html")
 
 
+
+
+@app.get("/chat", response_class=HTMLResponse)
+async def smart_chat_page(request: Request):
+    return templates.TemplateResponse(request, "chat.html")
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_portal(request: Request):
     return templates.TemplateResponse(request, "admin.html")
@@ -1463,6 +1476,154 @@ async def health():
     return {"status": "ok", "service": "PhysioFlex", "version": "1.1.0"}
 
 
-# Register the separate Smart Chat router.
-from chat_routes import router as chat_router
-app.include_router(chat_router)
+# ---------- Smart Chat: role-aware assistant with authorized context tools ----------
+class SmartChatRequest(BaseModel):
+    message: str
+    patient_id: Optional[str] = None
+
+
+def _chat_patient_for_user(db: dict, user: TokenData, requested_patient_id: Optional[str]) -> Optional[dict]:
+    patients = db.get("patients", [])
+    if user.role == "patient":
+        return next((p for p in patients if p.get("user_id") == user.user_id or p.get("id") == user.user_id), None)
+    if user.role in ("doctor", "physiotherapist"):
+        if not requested_patient_id:
+            return None
+        patient = next((p for p in patients if p.get("id") == requested_patient_id), None)
+        if not patient or not _can_access_patient(user, patient):
+            raise HTTPException(status_code=403, detail="You do not have access to this patient")
+        return patient
+    if user.role == "admin":
+        # Admin can use general assistance, but does not receive patient medical context.
+        return None
+    raise HTTPException(status_code=403, detail="Smart Chat is not enabled for this role")
+
+
+def _chat_context_tools(db: dict, user: TokenData, patient: Optional[dict], message: str) -> dict:
+    """Small, explicit tool layer: only read records for the authorized patient."""
+    if not patient:
+        return {"available_tools": ["exercise_guidance"], "patient_context": None}
+    pid = patient.get("id")
+    sessions = [s for s in db.get("sessions", []) if s.get("patient_id") == pid]
+    sessions.sort(key=lambda x: x.get("created_at", x.get("date", "")))
+    plans = [p for p in db.get("rehab_plans", []) if p.get("patient_id") == pid]
+    assessments = [a for a in db.get("assessments", []) if a.get("patient_id") == pid]
+    alerts = [a for a in db.get("patient_alerts", []) if a.get("patient_id") in (pid, patient.get("user_id"))]
+    recent_sessions = sessions[-5:]
+    recent_assessments = assessments[-5:]
+    # Keep only relevant, non-secret fields in the LLM context.
+    return {
+        "tools_used": ["get_recovery_summary", "get_rehab_plans", "get_clinical_alerts"],
+        "patient_context": {
+            "patient_name": patient.get("name", "Patient"),
+            "condition": patient.get("condition", "Not recorded"),
+            "current_pain": patient.get("current_pain"),
+            "current_rom": patient.get("current_rom"),
+            "session_count": len(sessions),
+            "recent_sessions": [{k: s.get(k) for k in ("date", "pain_score", "max_rom", "exercise_name", "quality", "notes") if s.get(k) is not None} for s in recent_sessions],
+            "recent_assessments": [{k: a.get(k) for k in ("date", "pain_score", "rom_knee_flexion", "rom_knee_extension", "notes") if a.get(k) is not None} for a in recent_assessments],
+            "rehab_plans": [{k: p.get(k) for k in ("title", "status", "start_date", "end_date", "exercises") if p.get(k) is not None} for p in plans[-5:]],
+            "open_alerts": [{k: a.get(k) for k in ("alert_type", "message", "severity", "status", "created_at") if a.get(k) is not None} for a in alerts if a.get("status", "open") == "open"][-10:],
+        },
+    }
+
+def _is_pain_concern(message: str) -> tuple[bool, str]:
+    text = message.lower()
+    emergency_terms = ("chest pain", "can't breathe", "cannot breathe", "difficulty breathing", "fainted", "unconscious", "severe bleeding")
+    urgent_terms = ("severe pain", "sudden pain", "pain is getting worse", "pain getting worse", "worsening pain", "swelling increased", "numbness", "can't move", "cannot move")
+    if any(term in text for term in emergency_terms):
+        return True, "high"
+    if any(term in text for term in urgent_terms):
+        return True, "high"
+    if ("pain" in text and any(x in text for x in ("worse", "increased", "increasing", "more pain", "7/10", "8/10", "9/10", "10/10"))):
+        return True, "medium"
+    return False, ""
+
+
+def _gemini_reply(prompt: str) -> Optional[str]:
+    """Optional Gemini REST call; no SDK required. Returns None if not configured/unavailable."""
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.3, "maxOutputTokens": 700}}
+    req = URLRequest(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urlopen(req, timeout=18) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        return "".join(part.get("text", "") for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", [])).strip() or None
+    except (HTTPError, URLError, TimeoutError, ValueError, KeyError, IndexError):
+        return None
+
+
+def _fallback_chat_reply(message: str, role: str, context: dict) -> str:
+    text = message.lower()
+    patient = context.get("patient_context") or {}
+    if any(k in text for k in ("progress", "recovery", "summary", "how am i doing", "how is the patient")):
+        if not patient:
+            return "Select an assigned patient to view a recovery summary. I can also explain general exercise and rehabilitation concepts."
+        return (f"Recovery overview for {patient.get('patient_name', 'the patient')}: "
+                f"{patient.get('session_count', 0)} recorded sessions; current pain score: {patient.get('current_pain', 'not recorded')}; "
+                f"current ROM value: {patient.get('current_rom', 'not recorded')}. "
+                f"There are {len(patient.get('open_alerts', []))} open patient alert(s). These records are informational; a clinician should interpret the trend and approve any plan changes.")
+    if any(k in text for k in ("exercise", "stretch", "reps", "sets", "how do i do")):
+        return "Follow the exercise and repetitions prescribed in your active PhysioFlex plan. Move slowly, stay within the range your clinician approved, and do not force a movement. Stop if you experience new or increasing pain and contact your physiotherapist. Tell me the exercise name and I can explain general technique."
+    if any(k in text for k in ("pain", "hurt", "swelling", "numb", "tingling")):
+        return "I’m sorry you’re experiencing this. I can’t diagnose the cause. Stop the activity that worsens symptoms and contact your assigned physiotherapist or doctor for guidance. If symptoms are severe, sudden, or include chest pain or difficulty breathing, seek emergency medical care now."
+    if role in ("doctor", "physiotherapist"):
+        return "I can help summarize authorized recovery records, explain general exercise guidance, and flag patient-reported concerns. Ask for a recovery summary or select an assigned patient. Treatment decisions and plan changes remain with the clinician."
+    return "I’m PhysioFlex Smart Assistant. I can explain your assigned exercises, summarize the recovery information available to your account, and help you raise a concern with your care team. I don’t diagnose conditions or replace your clinician."
+
+
+@app.post("/api/chat/message")
+async def smart_chat_message(body: SmartChatRequest, user: TokenData = Depends(get_current_user)):
+    if user.role not in ("patient", "doctor", "physiotherapist", "admin"):
+        raise HTTPException(status_code=403, detail="Smart Chat is not enabled for this role")
+    message = (body.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=422, detail="Message cannot be empty")
+    if len(message) > 2000:
+        raise HTTPException(status_code=413, detail="Message is too long (maximum 2000 characters)")
+    db = get_db()
+    patient = _chat_patient_for_user(db, user, body.patient_id)
+    context = _chat_context_tools(db, user, patient, message)
+    concern, severity = _is_pain_concern(message)
+    alert_created = None
+    # A patient message about a possible deterioration can create a review alert.
+    if concern and user.role == "patient":
+        db.setdefault("patient_alerts", [])
+        alert_created = {
+            "id": generate_id("pal"),
+            "patient_id": patient.get("id") if patient else user.user_id,
+            "alert_type": "pain" if "pain" in message.lower() else "abnormality",
+            "message": message[:500],
+            "severity": severity,
+            "status": "open",
+            "source": "smart_chat",
+            "created_at": _now(),
+        }
+        db["patient_alerts"].append(alert_created)
+        save_db(db)
+        if patient:
+            roles = []
+            if patient.get("doctor_id"): roles.append("doctor")
+            if patient.get("physio_id"): roles.append("physiotherapist")
+            # Existing websocket manager is role-based. The payload contains no clinical details.
+            if roles:
+                await manager.broadcast_roles(roles, {"event": "smart_chat_alert", "patient_id": patient.get("id"), "alert_id": alert_created["id"], "message": "A patient submitted a symptom concern in Smart Chat. Please review the assigned patient's alert list."})
+    system_prompt = (
+        "You are PhysioFlex Smart Assistant for a rehabilitation software prototype. Be clear, supportive, concise. "
+        "Never diagnose, prescribe a new treatment, alter a rehabilitation plan, or claim the wearable proves a medical condition. "
+        "Give general exercise explanations only; defer plan-specific instructions to the assigned clinician. "
+        "For new/worsening/severe symptoms advise stopping the aggravating activity and contacting the clinician; for emergency symptoms advise emergency services. "
+        "Use only the authorized context JSON supplied. If data is missing, say so. For clinicians, summarize observations and recommendations for review, not decisions. "
+        f"Current user role: {user.role}. Authorized tool results: {json.dumps(context, ensure_ascii=False)[:9000]}. "
+        f"Patient concern detected: {concern}.\nUser message: {message}"
+    )
+    reply = await asyncio.to_thread(_gemini_reply, system_prompt)
+    if not reply:
+        reply = _fallback_chat_reply(message, user.role, context)
+    if concern:
+        reply += "\n\nSafety note: this message may require clinical review. Do not rely on this chat for emergency assessment."
+    return {"reply": reply, "role": user.role, "patient_id": patient.get("id") if patient else None, "tools_used": context.get("tools_used", ["exercise_guidance"]), "alert_created": bool(alert_created), "alert_id": alert_created.get("id") if alert_created else None, "ai_provider": "gemini" if os.getenv("GEMINI_API_KEY", "").strip() else "safe_fallback"}
