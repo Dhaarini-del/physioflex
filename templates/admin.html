@@ -161,7 +161,7 @@ async function load() {
 
 async function rejectCredentialRequest(reqId, patientName) {
   const confirmed = confirm(
-    'Reject login request for ' + patientName + '?\\n\\n' +
+    'Reject login request for ' + patientName + '?\n\n' +
     'The patient clinical record will remain, but the login request will be removed.'
   );
 
@@ -182,7 +182,7 @@ async function provision(reqId, emailHint) {
   const password = prompt('Temporary password:', 'Welcome@123') || 'Welcome@123';
   try {
     await api.provisionCredentials(reqId, { email, password });
-    alert('Credentials issued.\\nEmail: ' + email + '\\nPassword: ' + password);
+    alert('Credentials issued.\nEmail: ' + email + '\nPassword: ' + password);
     load();
   } catch (e) {
     alert('Failed: ' + e.message);
@@ -294,12 +294,9 @@ async function setComplaintStatus(id, status) {
   } catch (e) { alert(e.message); }
 }
 
-```html
 load();
 </script>
 
 <link rel="stylesheet" href="/static/chat-widget.css">
 <script src="/static/chat-widget.js" defer></script>
 {% endblock %}
-```
-
