@@ -1,8 +1,18 @@
-"""PhysioFlex persistence layer.
 
-Uses MongoDB Atlas in deployed environments and falls back to the bundled JSON
-file for local development when MONGODB_URI is not configured.
+"""PhysioFlex persistence layer.
+ 
+Uses MongoDB Atlas when MONGODB_URI is set, otherwise the local JSON file.
+ 
+IMPORTANT CHANGE: the old Mongo save did delete_many({}) on every collection and
+re-inserted a whole in-memory snapshot on every write. That is not safe: two
+overlapping requests overwrite each other, a failure between delete and insert
+leaves collections empty, and seeding replaced everything with demo data.
+ 
+Now get_db() remembers what it loaded, and save_db() writes ONLY the documents
+that were added/changed (upsert by "id") or removed. Nothing else is touched.
+The get_db()/save_db() interface is unchanged, so main.py needs no edits.
 """
+import copy
 import json
 import os
 import threading
@@ -10,26 +20,28 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
-
+ 
 try:
-    from pymongo import MongoClient
+    from pymongo import MongoClient, ReplaceOne, DeleteMany
 except ImportError:  # pragma: no cover
     MongoClient = None
-
+ 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "db.json"
+ 
 MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "physioflex")
+ 
 _lock = threading.Lock()
 _client = None
 _mongo_db = None
-
+ 
 COLLECTIONS = [
     "users", "patients", "assessments", "rehab_plans", "exercises", "sessions",
     "notes", "alerts", "events", "complaints", "voice_messages", "bookings",
     "patient_alerts", "suggestions", "schedules", "credential_requests",
 ]
-
+ 
 DATASET_EXERCISES = [
     {"id": "e1", "name": "Extended Leg Raises", "body_part": "Hip / Knee", "joints": ["right_hip", "right_knee"],
      "description": "Lying supine, raise the extended leg upward. Dataset e1.", "dataset_code": "e1", "default_sets": 3, "default_reps": 10, "default_target_rom": 45},
@@ -50,16 +62,23 @@ DATASET_EXERCISES = [
     {"id": "ex001", "name": "Seated Knee Extension", "body_part": "Knee", "joints": ["right_knee"],
      "description": "Seated open-chain knee extension for quadriceps and ROM.", "dataset_code": None, "default_sets": 3, "default_reps": 12, "default_target_rom": 120},
 ]
-
-
+ 
+ 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
+ 
+ 
 def _empty_db() -> Dict[str, Any]:
     return {key: [] for key in COLLECTIONS}
-
-
+ 
+ 
+class _Snapshot(dict):
+    """A db dict that remembers what was loaded from Mongo, keyed by doc id."""
+    _orig: Dict[str, Dict[str, Any]] = None
+ 
+ 
+# ---------------- local JSON (development only) ----------------
+ 
 def _local_load() -> Dict[str, Any]:
     if not DB_PATH.exists():
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -73,14 +92,18 @@ def _local_load() -> Dict[str, Any]:
     for key in COLLECTIONS:
         data.setdefault(key, [])
     return data
-
-
+ 
+ 
 def _local_save(data: Dict[str, Any]) -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(DB_PATH, "w", encoding="utf-8") as f:
+    tmp = DB_PATH.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
-
-
+    os.replace(tmp, DB_PATH)  # atomic
+ 
+ 
+# ---------------- MongoDB ----------------
+ 
 def _get_mongo_db():
     global _client, _mongo_db
     if not MONGODB_URI:
@@ -89,58 +112,79 @@ def _get_mongo_db():
         raise RuntimeError("pymongo is required when MONGODB_URI is configured")
     if _mongo_db is None:
         _client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000)
-        _mongo_db = _client[MONGO_DB_NAME]
         _client.admin.command("ping")
+        _mongo_db = _client[MONGO_DB_NAME]
+        for name in COLLECTIONS:  # non-unique on purpose: never fail on legacy data
+            try:
+                _mongo_db[name].create_index("id")
+            except Exception:
+                pass
     return _mongo_db
-
-
+ 
+ 
 def _mongo_load() -> Dict[str, Any]:
     db = _get_mongo_db()
-    data = _empty_db()
-    for collection in COLLECTIONS:
-        data[collection] = list(db[collection].find({}, {"_id": 0}))
+    data = _Snapshot(_empty_db())
+    orig: Dict[str, Dict[str, Any]] = {}
+    for name in COLLECTIONS:
+        rows = list(db[name].find({}, {"_id": 0}))
+        data[name] = rows
+        orig[name] = {r["id"]: copy.deepcopy(r) for r in rows if "id" in r}
+    data._orig = orig
     return data
-
-
+ 
+ 
 def _mongo_save(data: Dict[str, Any]) -> None:
     db = _get_mongo_db()
-
-    for collection in COLLECTIONS:
-        coll = db[collection]
-        coll.delete_many({})
-
-        rows = data.get(collection) or []
-
-        if rows:
-            # Use copies so PyMongo does not add ObjectId values
-            # to the dictionaries used by the API response.
-            clean_rows = []
-
-            for row in rows:
-                document = dict(row)
-                document.pop("_id", None)
-                clean_rows.append(document)
-
-            coll.insert_many(clean_rows, ordered=False)
-
-
+    orig_all = getattr(data, "_orig", None) or {}
+    for name in COLLECTIONS:
+        rows = data.get(name) or []
+        orig = orig_all.get(name, {})
+        current = {r["id"]: r for r in rows if "id" in r}
+ 
+        ops = []
+        for _id, doc in current.items():
+            if orig.get(_id) != doc:  # new or changed
+                clean = {k: v for k, v in doc.items() if k != "_id"}
+                ops.append(ReplaceOne({"id": _id}, clean, upsert=True))
+        removed = [i for i in orig if i not in current]
+        if removed:
+            ops.append(DeleteMany({"id": {"$in": removed}}))
+        if ops:
+            db[name].bulk_write(ops, ordered=True)
+ 
+    # after a successful save, the current state is the new baseline
+    if isinstance(data, _Snapshot):
+        data._orig = {n: {r["id"]: copy.deepcopy(r) for r in (data.get(n) or []) if "id" in r}
+                      for n in COLLECTIONS}
+ 
+ 
 def get_db() -> Dict[str, Any]:
     with _lock:
         return _mongo_load() if MONGODB_URI else _local_load()
-
-
+ 
+ 
 def save_db(data: Dict[str, Any]) -> None:
     with _lock:
         if MONGODB_URI:
             _mongo_save(data)
         else:
             _local_save(data)
-
-
+ 
+ 
+def describe_db() -> str:
+    """One-line summary for startup logs: which DB the app is really using."""
+    if not MONGODB_URI:
+        return f"local JSON file: {DB_PATH}"
+    db = _get_mongo_db()
+    counts = {n: db[n].count_documents({}) for n in ("users", "patients", "sessions")}
+    return f"MongoDB database '{MONGO_DB_NAME}' -> {counts}"
+ 
+ 
 def generate_id(prefix: str = "") -> str:
     return (prefix + str(uuid.uuid4())[:8]) if prefix else str(uuid.uuid4())[:8]
-
-
+ 
+ 
 def append_event(event_type: str, payload: dict, patient_id: str = None) -> dict:
     data = get_db()
     event = {
@@ -154,8 +198,8 @@ def append_event(event_type: str, payload: dict, patient_id: str = None) -> dict
     data["events"] = data["events"][-200:]
     save_db(data)
     return event
-
-
+ 
+ 
 def _seed_data() -> Dict[str, Any]:
     from passlib.context import CryptContext
     pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -194,23 +238,24 @@ def _seed_data() -> Dict[str, Any]:
     data["notes"] = [{"id": "note001", "patient_id": "pat001", "author_id": "phy001", "author_role": "physiotherapist", "content": "Patient reporting reduced swelling. ROM improving steadily.", "created_at": _now()}]
     data["alerts"] = [{"id": "alt001", "patient_id": "pat001", "type": "movement", "severity": "medium", "message": "Slight compensatory hip hike during knee extension on 2026-09-27.", "resolved": False, "created_at": _now()}]
     return data
-
-
+ 
+ 
 def seed_if_empty() -> None:
+    """Seed demo data ONLY when there are no users at all. Never replaces existing data."""
     data = get_db()
+    print("PhysioFlex storage:", describe_db())
+ 
     if data.get("users"):
+        # Existing data: just make sure the exercise catalog and an admin exist.
         data["exercises"] = DATASET_EXERCISES
-        changed = False
-        for key in COLLECTIONS:
-            if key not in data:
-                data[key] = []
-                changed = True
         if not any(u.get("role") == "admin" for u in data["users"]):
             from passlib.context import CryptContext
             hashed = CryptContext(schemes=["bcrypt"], deprecated="auto").hash(os.getenv("DEMO_PASSWORD", "password123"))
-            data["users"].insert(0, {"id": "adm001", "email": "admin@physioflex.com", "password": hashed, "name": "System Admin", "role": "admin", "created_at": _now()})
-            changed = True
-        save_db(data)
+            data["users"].insert(0, {"id": "adm001", "email": "admin@physioflex.com", "password": hashed,
+                                     "name": "System Admin", "role": "admin", "created_at": _now()})
+        save_db(data)  # only upserts what actually changed
         return
+ 
+    # Fresh database: write the seed documents (upserts only, no deletes).
     save_db(_seed_data())
-    print("PhysioFlex database seeded")
+    print("PhysioFlex database seeded (was empty)")
