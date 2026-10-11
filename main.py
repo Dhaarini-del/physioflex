@@ -42,6 +42,16 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
+# ---------- Small safe helpers ----------
+def _ts(item: dict) -> str:
+    """Sort key that never crashes on a missing/None created_at."""
+    return str(item.get("created_at") or item.get("date") or "")
+
+
+def _find_patient(db: dict, patient_id: str) -> Optional[dict]:
+    return next((p for p in db.get("patients", []) if p.get("id") == patient_id), None)
+
+
 # ---------- Real-time connection manager ----------
 class ConnectionManager:
     def __init__(self):
@@ -87,10 +97,6 @@ manager = ConnectionManager()
 async def startup():
     seed_if_empty()
     print("PhysioFlex 1.1 started")
-    print("  admin@physioflex.com  / password123")
-    print("  doctor@physioflex.com / password123")
-    print("  physio@physioflex.com / password123")
-    print("  patient@physioflex.com / password123")
 
 
 # ---------- Auth ----------
@@ -108,8 +114,9 @@ class LoginResponse(BaseModel):
 @app.post("/api/auth/login", response_model=LoginResponse)
 async def login(body: LoginRequest):
     db = get_db()
-    user = next((u for u in db["users"] if u["email"] == body.email), None)
-    if not user or not verify_password(body.password, user["password"]):
+    email = (body.email or "").strip().lower()
+    user = next((u for u in db["users"] if (u.get("email") or "").strip().lower() == email), None)
+    if not user or not verify_password(body.password, user.get("password", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_access_token(
         {"sub": user["id"], "role": user["role"], "email": user["email"]}
@@ -123,7 +130,7 @@ async def login(body: LoginRequest):
 @app.get("/api/auth/me", response_model=UserOut)
 async def me(user: TokenData = Depends(get_current_user)):
     db = get_db()
-    u = next((x for x in db["users"] if x["id"] == user.user_id), None)
+    u = next((x for x in db["users"] if x.get("id") == user.user_id), None)
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
     return UserOut(id=u["id"], email=u["email"], name=u["name"], role=u["role"])
@@ -147,22 +154,34 @@ def _can_access_patient(user: TokenData, patient: dict) -> bool:
     return False
 
 
+def _require_patient_access(db: dict, user: TokenData, patient_id: str) -> dict:
+    """404 if the patient does not exist, 403 if this user may not see them.
+    Admins are allowed (they manage accounts)."""
+    patient = _find_patient(db, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    if user.role != "admin" and not _can_access_patient(user, patient):
+        raise HTTPException(status_code=403, detail="Access denied")
+    return patient
+
+
 @app.get("/api/patients")
 async def list_patients(user: TokenData = Depends(get_current_user)):
     db = get_db()
+    patients = db.get("patients", [])
     if user.role == "doctor":
-        return [p for p in db["patients"] if p.get("doctor_id") == user.user_id]
+        return [p for p in patients if p.get("doctor_id") == user.user_id]
     if user.role == "physiotherapist":
-        return [p for p in db["patients"] if p.get("physio_id") == user.user_id]
+        return [p for p in patients if p.get("physio_id") == user.user_id]
     if user.role == "patient":
-        return [p for p in db["patients"] if p.get("user_id") == user.user_id or p.get("id") == user.user_id]
+        return [p for p in patients if p.get("user_id") == user.user_id or p.get("id") == user.user_id]
     return []
 
 
 @app.get("/api/patients/{patient_id}")
 async def get_patient(patient_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    patient = next((p for p in db["patients"] if p["id"] == patient_id), None)
+    patient = _find_patient(db, patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     if not _can_access_patient(user, patient):
@@ -276,7 +295,7 @@ async def update_patient(
     user: TokenData = Depends(require_role("doctor", "physiotherapist")),
 ):
     db = get_db()
-    patient = next((p for p in db["patients"] if p["id"] == patient_id), None)
+    patient = _find_patient(db, patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     if not _can_access_patient(user, patient):
@@ -300,12 +319,12 @@ async def delete_patient(
     user: TokenData = Depends(require_role("doctor", "physiotherapist")),
 ):
     db = get_db()
-    patient = next((p for p in db["patients"] if p["id"] == patient_id), None)
+    patient = _find_patient(db, patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     if not _can_access_patient(user, patient):
         raise HTTPException(status_code=403, detail="Access denied")
-    db["patients"] = [p for p in db["patients"] if p["id"] != patient_id]
+    db["patients"] = [p for p in db["patients"] if p.get("id") != patient_id]
     # cascade soft: remove plans/sessions/notes for this patient optional – keep history
     save_db(db)
     append_event("patient_deleted", {"patient_id": patient_id}, patient_id=patient_id)
@@ -319,7 +338,8 @@ async def delete_patient(
 @app.get("/api/patients/{patient_id}/assessments")
 async def get_assessments(patient_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    return [a for a in db["assessments"] if a["patient_id"] == patient_id]
+    _require_patient_access(db, user, patient_id)
+    return [a for a in db.get("assessments", []) if a.get("patient_id") == patient_id]
 
 
 class AssessmentCreate(BaseModel):
@@ -336,6 +356,7 @@ async def create_assessment(
     user: TokenData = Depends(require_role("physiotherapist")),
 ):
     db = get_db()
+    patient = _require_patient_access(db, user, patient_id)
     assessment = {
         "id": generate_id("asm"),
         "patient_id": patient_id,
@@ -348,12 +369,9 @@ async def create_assessment(
         "created_at": _now(),
     }
     db["assessments"].append(assessment)
-    for p in db["patients"]:
-        if p["id"] == patient_id:
-            p["current_pain"] = body.pain_score
-            p["current_rom"] = body.rom_knee_flexion
-            p["updated_at"] = _now()
-            break
+    patient["current_pain"] = body.pain_score
+    patient["current_rom"] = body.rom_knee_flexion
+    patient["updated_at"] = _now()
     save_db(db)
     await manager.broadcast_roles(["doctor", "physiotherapist"], {
         "event": "assessment_created", "patient_id": patient_id, "data": assessment,
@@ -365,7 +383,8 @@ async def create_assessment(
 @app.get("/api/patients/{patient_id}/plans")
 async def get_plans(patient_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    return [p for p in db["rehab_plans"] if p["patient_id"] == patient_id]
+    _require_patient_access(db, user, patient_id)
+    return [p for p in db.get("rehab_plans", []) if p.get("patient_id") == patient_id]
 
 
 class ExerciseInPlan(BaseModel):
@@ -380,8 +399,8 @@ class ExerciseInPlan(BaseModel):
 
 class PlanCreate(BaseModel):
     title: str
-    start_date: str
-    end_date: str
+    start_date: str = ""
+    end_date: str = ""
     exercises: List[ExerciseInPlan] = []
 
 
@@ -400,6 +419,7 @@ async def create_plan(
     user: TokenData = Depends(require_role("physiotherapist")),
 ):
     db = get_db()
+    _require_patient_access(db, user, patient_id)
     plan = {
         "id": generate_id("plan"),
         "patient_id": patient_id,
@@ -428,7 +448,7 @@ async def update_plan(
     user: TokenData = Depends(require_role("physiotherapist")),
 ):
     db = get_db()
-    plan = next((p for p in db["rehab_plans"] if p["id"] == plan_id), None)
+    plan = next((p for p in db["rehab_plans"] if p.get("id") == plan_id), None)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     data = body.dict(exclude_unset=True)
@@ -441,7 +461,7 @@ async def update_plan(
     plan["updated_at"] = _now()
     save_db(db)
     await manager.broadcast_roles(["doctor", "physiotherapist", "patient"], {
-        "event": "plan_updated", "patient_id": plan["patient_id"], "data": plan,
+        "event": "plan_updated", "patient_id": plan.get("patient_id"), "data": plan,
     })
     return plan
 
@@ -452,11 +472,11 @@ async def delete_plan(
     user: TokenData = Depends(require_role("physiotherapist")),
 ):
     db = get_db()
-    plan = next((p for p in db["rehab_plans"] if p["id"] == plan_id), None)
+    plan = next((p for p in db["rehab_plans"] if p.get("id") == plan_id), None)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
-    pid = plan["patient_id"]
-    db["rehab_plans"] = [p for p in db["rehab_plans"] if p["id"] != plan_id]
+    pid = plan.get("patient_id")
+    db["rehab_plans"] = [p for p in db["rehab_plans"] if p.get("id") != plan_id]
     save_db(db)
     await manager.broadcast_roles(["doctor", "physiotherapist", "patient"], {
         "event": "plan_deleted", "patient_id": pid, "plan_id": plan_id,
@@ -468,8 +488,9 @@ async def delete_plan(
 @app.get("/api/patients/{patient_id}/sessions")
 async def get_sessions(patient_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    sessions = [s for s in db["sessions"] if s["patient_id"] == patient_id]
-    sessions.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    _require_patient_access(db, user, patient_id)
+    sessions = [s for s in db.get("sessions", []) if s.get("patient_id") == patient_id]
+    sessions.sort(key=_ts, reverse=True)
     return sessions
 
 
@@ -497,7 +518,7 @@ async def create_session(
     if user.role == "patient":
         patient_id = user.user_id
         # map user_id to patient id
-        pmatch = next((p for p in db["patients"] if p.get("user_id") == user.user_id or p["id"] == user.user_id), None)
+        pmatch = next((p for p in db["patients"] if p.get("user_id") == user.user_id or p.get("id") == user.user_id), None)
         if pmatch:
             patient_id = pmatch["id"]
     else:
@@ -524,7 +545,7 @@ async def create_session(
     db["sessions"].append(session)
 
     for p in db["patients"]:
-        if p["id"] == patient_id:
+        if p.get("id") == patient_id:
             p["current_pain"] = body.pain_score
             p["current_rom"] = max(p.get("current_rom") or 0, body.max_rom)
             p["updated_at"] = _now()
@@ -532,12 +553,12 @@ async def create_session(
 
     total_target = total_done = 0
     for s in db["sessions"]:
-        if s["patient_id"] == patient_id:
-            total_target += s.get("target_reps", 0) * max(s.get("sets_completed", 1), 1)
-            total_done += s.get("reps_completed", 0)
+        if s.get("patient_id") == patient_id:
+            total_target += (s.get("target_reps") or 0) * max(s.get("sets_completed") or 1, 1)
+            total_done += s.get("reps_completed") or 0
     if total_target > 0:
         for p in db["patients"]:
-            if p["id"] == patient_id:
+            if p.get("id") == patient_id:
                 p["adherence_percent"] = min(100, int((total_done / total_target) * 100))
                 break
 
@@ -559,11 +580,11 @@ async def delete_session(
     user: TokenData = Depends(require_role("doctor", "physiotherapist")),
 ):
     db = get_db()
-    ses = next((s for s in db["sessions"] if s["id"] == session_id), None)
+    ses = next((s for s in db["sessions"] if s.get("id") == session_id), None)
     if not ses:
         raise HTTPException(status_code=404, detail="Session not found")
-    pid = ses["patient_id"]
-    db["sessions"] = [s for s in db["sessions"] if s["id"] != session_id]
+    pid = ses.get("patient_id")
+    db["sessions"] = [s for s in db["sessions"] if s.get("id") != session_id]
     save_db(db)
     await manager.broadcast_roles(["doctor", "physiotherapist"], {
         "event": "session_deleted", "patient_id": pid, "session_id": session_id,
@@ -575,7 +596,8 @@ async def delete_session(
 @app.get("/api/patients/{patient_id}/notes")
 async def get_notes(patient_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    return [n for n in db["notes"] if n["patient_id"] == patient_id]
+    _require_patient_access(db, user, patient_id)
+    return [n for n in db.get("notes", []) if n.get("patient_id") == patient_id]
 
 
 class NoteCreate(BaseModel):
@@ -589,6 +611,7 @@ async def create_note(
     user: TokenData = Depends(require_role("doctor", "physiotherapist")),
 ):
     db = get_db()
+    _require_patient_access(db, user, patient_id)
     note = {
         "id": generate_id("note"),
         "patient_id": patient_id,
@@ -601,7 +624,7 @@ async def create_note(
     save_db(db)
     await manager.broadcast_roles(["doctor", "physiotherapist", "patient"], {
         "event": "note_added", "patient_id": patient_id, "data": note,
-        "message": f"New note on patient record",
+        "message": "New note on patient record",
     })
     return note
 
@@ -610,53 +633,65 @@ async def create_note(
 @app.get("/api/patients/{patient_id}/alerts")
 async def get_alerts(patient_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    return [a for a in db["alerts"] if a["patient_id"] == patient_id]
+    _require_patient_access(db, user, patient_id)
+    return [a for a in db.get("alerts", []) if a.get("patient_id") == patient_id]
 
 
-# ---------- Dashboards ----------
+# ---------- Dashboards (tolerant of incomplete documents) ----------
 @app.get("/api/dashboard/doctor")
 async def doctor_dashboard(user: TokenData = Depends(require_role("doctor"))):
     db = get_db()
-    patients = [p for p in db["patients"] if p.get("doctor_id") == user.user_id]
-    alerts = [a for a in db["alerts"] if not a.get("resolved") and any(p["id"] == a["patient_id"] for p in patients)]
+    patients = [p for p in db.get("patients", []) if p.get("doctor_id") == user.user_id]
+    ids = {p.get("id") for p in patients}
+    alerts = [a for a in db.get("alerts", []) if not a.get("resolved") and a.get("patient_id") in ids]
+    sessions = sorted(
+        [s for s in db.get("sessions", []) if s.get("patient_id") in ids],
+        key=_ts, reverse=True,
+    )[:15]
+    events = sorted(db.get("events", []), key=_ts, reverse=True)[:20]
     return {
         "patient_count": len(patients),
         "patients": patients,
         "active_alerts": alerts,
-        "recent_sessions": sorted(
-            [s for s in db["sessions"] if any(p["id"] == s["patient_id"] for p in patients)],
-            key=lambda x: x.get("created_at", ""), reverse=True,
-        )[:15],
-        "recent_events": sorted(db.get("events", []), key=lambda x: x.get("created_at", ""), reverse=True)[:20],
+        "recent_sessions": sessions,
+        "recent_events": events,
     }
 
 
 @app.get("/api/dashboard/physio")
 async def physio_dashboard(user: TokenData = Depends(require_role("physiotherapist"))):
     db = get_db()
-    patients = [p for p in db["patients"] if p.get("physio_id") == user.user_id]
+    patients = [p for p in db.get("patients", []) if p.get("physio_id") == user.user_id]
+    ids = {p.get("id") for p in patients}
+    sessions = sorted(
+        [s for s in db.get("sessions", []) if s.get("patient_id") in ids],
+        key=_ts, reverse=True,
+    )[:15]
     return {
         "patient_count": len(patients),
         "patients": patients,
-        "plans": [p for p in db["rehab_plans"] if p.get("physio_id") == user.user_id],
+        "plans": [p for p in db.get("rehab_plans", []) if p.get("physio_id") == user.user_id],
         "exercises": db.get("exercises", []),
-        "recent_sessions": sorted(
-            [s for s in db["sessions"] if any(p["id"] == s["patient_id"] for p in patients)],
-            key=lambda x: x.get("created_at", ""), reverse=True,
-        )[:15],
+        "recent_sessions": sessions,
     }
 
 
 @app.get("/api/dashboard/patient")
 async def patient_dashboard(user: TokenData = Depends(require_role("patient"))):
     db = get_db()
-    patient = next((p for p in db["patients"] if p.get("user_id") == user.user_id or p["id"] == user.user_id), None)
+    patient = next(
+        (p for p in db.get("patients", [])
+         if p.get("user_id") == user.user_id or p.get("id") == user.user_id),
+        None,
+    )
     if not patient:
         return {"patient": None, "active_plans": [], "recent_sessions": []}
-    plans = [p for p in db["rehab_plans"] if p["patient_id"] == patient["id"] and p["status"] == "active"]
+    pid = patient.get("id")
+    plans = [p for p in db.get("rehab_plans", [])
+             if p.get("patient_id") == pid and p.get("status") == "active"]
     sessions = sorted(
-        [s for s in db["sessions"] if s["patient_id"] == patient["id"]],
-        key=lambda x: x.get("created_at", ""), reverse=True,
+        [s for s in db.get("sessions", []) if s.get("patient_id") == pid],
+        key=_ts, reverse=True,
     )[:15]
     return {"patient": patient, "active_plans": plans, "recent_sessions": sessions}
 
@@ -664,10 +699,11 @@ async def patient_dashboard(user: TokenData = Depends(require_role("patient"))):
 @app.get("/api/patients/{patient_id}/progress")
 async def get_progress(patient_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    sessions = [s for s in db["sessions"] if s["patient_id"] == patient_id]
-    sessions.sort(key=lambda x: x.get("date", ""))
-    rom_trend = [{"date": s["date"], "rom": s["max_rom"]} for s in sessions]
-    pain_trend = [{"date": s["date"], "pain": s["pain_score"]} for s in sessions]
+    _require_patient_access(db, user, patient_id)
+    sessions = [s for s in db.get("sessions", []) if s.get("patient_id") == patient_id]
+    sessions.sort(key=lambda x: str(x.get("date") or ""))
+    rom_trend = [{"date": s.get("date"), "rom": s.get("max_rom")} for s in sessions]
+    pain_trend = [{"date": s.get("date"), "pain": s.get("pain_score")} for s in sessions]
     return {
         "rom_trend": rom_trend,
         "pain_trend": pain_trend,
@@ -710,12 +746,10 @@ async def websocket_session(websocket: WebSocket, patient_id: str):
         manager.disconnect(websocket, "patient", patient_id)
 
 
-
-
 @app.get("/api/admin/credential-requests")
 async def list_credential_requests(user: TokenData = Depends(require_role("admin"))):
     db = get_db()
-    return sorted(db.get("credential_requests", []), key=lambda x: x.get("created_at", ""), reverse=True)
+    return sorted(db.get("credential_requests", []), key=_ts, reverse=True)
 
 
 class ProvisionCredentials(BaseModel):
@@ -729,10 +763,10 @@ async def provision_credentials(req_id: str, body: ProvisionCredentials, user: T
     """Admin issues login credentials for a pending patient request."""
     from auth import get_password_hash
     db = get_db()
-    req = next((r for r in db.get("credential_requests", []) if r["id"] == req_id), None)
+    req = next((r for r in db.get("credential_requests", []) if r.get("id") == req_id), None)
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
-    if any(u["email"] == body.email for u in db["users"]):
+    if any(u.get("email") == body.email for u in db["users"]):
         raise HTTPException(status_code=400, detail="Email already in use")
     uid = req.get("patient_id") or generate_id("pat")
     new_user = {
@@ -746,7 +780,7 @@ async def provision_credentials(req_id: str, body: ProvisionCredentials, user: T
     }
     db["users"].append(new_user)
     for p in db["patients"]:
-        if p["id"] == req.get("patient_id"):
+        if p.get("id") == req.get("patient_id"):
             p["user_id"] = uid
             p["email"] = body.email
             p["status"] = "active"
@@ -860,7 +894,7 @@ async def admin_list_users(user: TokenData = Depends(require_role("admin"))):
 async def admin_create_user(body: AdminUserCreate, user: TokenData = Depends(require_role("admin"))):
     from auth import get_password_hash
     db = get_db()
-    if any(u["email"] == body.email for u in db["users"]):
+    if any(u.get("email") == body.email for u in db["users"]):
         raise HTTPException(status_code=400, detail="Email already registered")
     if body.role not in ("admin", "doctor", "physiotherapist", "patient"):
         raise HTTPException(status_code=400, detail="Invalid role")
@@ -905,7 +939,7 @@ async def admin_create_user(body: AdminUserCreate, user: TokenData = Depends(req
 async def admin_update_user(user_id: str, body: AdminUserUpdate, user: TokenData = Depends(require_role("admin"))):
     from auth import get_password_hash
     db = get_db()
-    u = next((x for x in db["users"] if x["id"] == user_id), None)
+    u = next((x for x in db["users"] if x.get("id") == user_id), None)
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
     data = body.dict(exclude_unset=True)
@@ -916,9 +950,9 @@ async def admin_update_user(user_id: str, body: AdminUserUpdate, user: TokenData
         if v is not None:
             u[k] = v
     # sync patient name/email if patient
-    if u["role"] == "patient":
+    if u.get("role") == "patient":
         for p in db["patients"]:
-            if p.get("user_id") == user_id or p["id"] == user_id:
+            if p.get("user_id") == user_id or p.get("id") == user_id:
                 if "name" in data and data["name"]:
                     p["name"] = data["name"]
                 if "email" in data and data["email"]:
@@ -937,12 +971,12 @@ async def admin_delete_user(user_id: str, user: TokenData = Depends(require_role
     db = get_db()
     if user_id == user.user_id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
-    u = next((x for x in db["users"] if x["id"] == user_id), None)
+    u = next((x for x in db["users"] if x.get("id") == user_id), None)
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
-    db["users"] = [x for x in db["users"] if x["id"] != user_id]
-    if u["role"] == "patient":
-        db["patients"] = [p for p in db["patients"] if p.get("user_id") != user_id and p["id"] != user_id]
+    db["users"] = [x for x in db["users"] if x.get("id") != user_id]
+    if u.get("role") == "patient":
+        db["patients"] = [p for p in db["patients"] if p.get("user_id") != user_id and p.get("id") != user_id]
     save_db(db)
     await manager.broadcast_roles(["admin"], {"event": "user_deleted", "user_id": user_id})
     return {"ok": True, "deleted": user_id}
@@ -953,7 +987,8 @@ async def admin_stats(user: TokenData = Depends(require_role("admin"))):
     db = get_db()
     roles = {}
     for u in db["users"]:
-        roles[u["role"]] = roles.get(u["role"], 0) + 1
+        r = u.get("role", "unknown")
+        roles[r] = roles.get(r, 0) + 1
     return {
         "users": len(db["users"]),
         "patients": len(db["patients"]),
@@ -980,11 +1015,11 @@ async def list_complaints(user: TokenData = Depends(get_current_user)):
     db = get_db()
     all_c = db.get("complaints", [])
     if user.role == "admin":
-        return sorted(all_c, key=lambda x: x.get("created_at", ""), reverse=True)
+        return sorted(all_c, key=_ts, reverse=True)
     # users see their own filed complaints
     return sorted(
         [c for c in all_c if c.get("filed_by_id") == user.user_id],
-        key=lambda x: x.get("created_at", ""), reverse=True,
+        key=_ts, reverse=True,
     )
 
 
@@ -995,7 +1030,7 @@ async def create_complaint(body: ComplaintCreate, user: TokenData = Depends(get_
     complaint = {
         "id": generate_id("cmp"),
         "filed_by_id": user.user_id,
-        "filed_by_name": next((u["name"] for u in db["users"] if u["id"] == user.user_id), user.email),
+        "filed_by_name": next((u.get("name") for u in db["users"] if u.get("id") == user.user_id), user.email),
         "filed_by_role": user.role,
         "against_role": body.against_role,
         "against_name": body.against_name,
@@ -1032,7 +1067,7 @@ async def update_complaint(
     user: TokenData = Depends(require_role("admin")),
 ):
     db = get_db()
-    c = next((x for x in db.get("complaints", []) if x["id"] == complaint_id), None)
+    c = next((x for x in db.get("complaints", []) if x.get("id") == complaint_id), None)
     if not c:
         raise HTTPException(status_code=404, detail="Complaint not found")
     if body.status is not None:
@@ -1043,8 +1078,6 @@ async def update_complaint(
     c["reviewed_by"] = user.user_id
     save_db(db)
     return c
-
-
 
 
 # ---------- Schedules / visit alerts ----------
@@ -1065,10 +1098,10 @@ async def list_schedules(user: TokenData = Depends(get_current_user)):
         pid = user.user_id
         return [s for s in items if s.get("patient_id") == pid]
     if user.role == "doctor":
-        pids = {p["id"] for p in db["patients"] if p.get("doctor_id") == user.user_id}
+        pids = {p.get("id") for p in db["patients"] if p.get("doctor_id") == user.user_id}
         return [s for s in items if s.get("patient_id") in pids]
     if user.role == "physiotherapist":
-        pids = {p["id"] for p in db["patients"] if p.get("physio_id") == user.user_id}
+        pids = {p.get("id") for p in db["patients"] if p.get("physio_id") == user.user_id}
         return [s for s in items if s.get("patient_id") in pids]
     return items
 
@@ -1116,7 +1149,7 @@ async def list_suggestions(user: TokenData = Depends(get_current_user)):
     if user.role == "doctor":
         return [s for s in items if s.get("doctor_id") == user.user_id]
     if user.role == "physiotherapist":
-        pids = {p["id"] for p in db["patients"] if p.get("physio_id") == user.user_id}
+        pids = {p.get("id") for p in db["patients"] if p.get("physio_id") == user.user_id}
         return [s for s in items if s.get("patient_id") in pids]
     if user.role == "patient":
         return [s for s in items if s.get("patient_id") == user.user_id]
@@ -1143,7 +1176,7 @@ async def create_suggestion(body: SuggestionCreate, user: TokenData = Depends(re
     db["suggestions"].append(item)
     # also update patient operation fields if provided
     for p in db["patients"]:
-        if p["id"] == body.patient_id:
+        if p.get("id") == body.patient_id:
             if body.operation_type:
                 p["operation"] = body.operation_type
             if body.abnormality_notes:
@@ -1172,10 +1205,10 @@ async def list_patient_alerts(user: TokenData = Depends(get_current_user)):
     if user.role == "patient":
         return [a for a in items if a.get("patient_id") == user.user_id]
     if user.role == "doctor":
-        pids = {p["id"] for p in db["patients"] if p.get("doctor_id") == user.user_id}
+        pids = {p.get("id") for p in db["patients"] if p.get("doctor_id") == user.user_id}
         return [a for a in items if a.get("patient_id") in pids]
     if user.role == "physiotherapist":
-        pids = {p["id"] for p in db["patients"] if p.get("physio_id") == user.user_id}
+        pids = {p.get("id") for p in db["patients"] if p.get("physio_id") == user.user_id}
         return [a for a in items if a.get("patient_id") in pids]
     return items
 
@@ -1254,7 +1287,7 @@ class BookingUpdate(BaseModel):
 @app.put("/api/bookings/{booking_id}")
 async def update_booking(booking_id: str, body: BookingUpdate, user: TokenData = Depends(require_role("doctor", "physiotherapist", "admin"))):
     db = get_db()
-    b = next((x for x in db.get("bookings", []) if x["id"] == booking_id), None)
+    b = next((x for x in db.get("bookings", []) if x.get("id") == booking_id), None)
     if not b:
         raise HTTPException(status_code=404, detail="Booking not found")
     b["status"] = body.status
@@ -1265,7 +1298,7 @@ async def update_booking(booking_id: str, body: BookingUpdate, user: TokenData =
     b["updated_at"] = _now()
     save_db(db)
     await manager.broadcast_roles(["patient", "doctor", "physiotherapist"], {
-        "event": "booking_updated", "patient_id": b["patient_id"], "data": b,
+        "event": "booking_updated", "patient_id": b.get("patient_id"), "data": b,
     })
     return b
 
@@ -1279,19 +1312,23 @@ class VoiceMessageCreate(BaseModel):
     duration_seconds: int = 0
 
 
+def _vm_visible(m: dict, user: TokenData) -> bool:
+    """A message is visible to its sender, to its specific recipient, and -
+    only when it is NOT addressed to one specific person - to everyone in the
+    target role. (Before, any patient could read messages meant for another
+    patient.)"""
+    if m.get("from_id") == user.user_id:
+        return True
+    if m.get("to_user_id"):
+        return m.get("to_user_id") == user.user_id
+    return m.get("to_role") == user.role
+
+
 @app.get("/api/voice-messages")
 async def list_voice_messages(user: TokenData = Depends(get_current_user)):
     db = get_db()
     items = db.get("voice_messages", [])
-    # Everyone sees messages they sent or received
-    out = []
-    for m in items:
-        if m.get("from_id") == user.user_id:
-            out.append(m)
-        elif m.get("to_user_id") == user.user_id:
-            out.append(m)
-        elif m.get("to_role") == user.role:
-            out.append(m)
+    out = [m for m in items if _vm_visible(m, user)]
     # strip large audio from list
     clean = []
     for m in out:
@@ -1300,7 +1337,7 @@ async def list_voice_messages(user: TokenData = Depends(get_current_user)):
             c["has_audio"] = True
             c["audio_base64"] = None
         clean.append(c)
-    return sorted(clean, key=lambda x: x.get("created_at", ""), reverse=True)
+    return sorted(clean, key=_ts, reverse=True)
 
 
 @app.post("/api/voice-messages")
@@ -1343,16 +1380,10 @@ async def create_voice_message(body: VoiceMessageCreate, user: TokenData = Depen
 @app.get("/api/voice-messages/{msg_id}/audio")
 async def get_voice_audio(msg_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    m = next((x for x in db.get("voice_messages", []) if x["id"] == msg_id), None)
+    m = next((x for x in db.get("voice_messages", []) if x.get("id") == msg_id), None)
     if not m:
         raise HTTPException(status_code=404, detail="Message not found")
-    allowed = (
-        m.get("from_id") == user.user_id
-        or m.get("to_user_id") == user.user_id
-        or m.get("to_role") == user.role
-        or user.role == "admin"
-    )
-    if not allowed:
+    if not (_vm_visible(m, user) or user.role == "admin"):
         raise HTTPException(status_code=403, detail="Not allowed")
     audio = m.get("audio_base64")
     if not audio:
@@ -1364,11 +1395,9 @@ async def get_voice_audio(msg_id: str, user: TokenData = Depends(get_current_use
 @app.get("/api/patients/{patient_id}/evaluation")
 async def progress_evaluation(patient_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    patient = next((p for p in db["patients"] if p["id"] == patient_id), None)
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    sessions = [s for s in db["sessions"] if s["patient_id"] == patient_id]
-    sessions.sort(key=lambda x: x.get("created_at", ""))
+    patient = _require_patient_access(db, user, patient_id)
+    sessions = [s for s in db.get("sessions", []) if s.get("patient_id") == patient_id]
+    sessions.sort(key=_ts)
     if not sessions:
         return {
             "patient_id": patient_id,
@@ -1379,6 +1408,7 @@ async def progress_evaluation(patient_id: str, user: TokenData = Depends(get_cur
             "adherence": patient.get("adherence_percent", 0),
             "recommendations": ["Complete more exercise sessions for evaluation."],
             "session_count": 0,
+            "good_quality_ratio": 0,
         }
     first_rom = sessions[0].get("max_rom") or 0
     last_rom = sessions[-1].get("max_rom") or 0
@@ -1387,7 +1417,7 @@ async def progress_evaluation(patient_id: str, user: TokenData = Depends(get_cur
     good_q = sum(1 for s in sessions if s.get("quality") == "Good")
     rom_imp = last_rom - first_rom
     pain_delta = first_pain - last_pain  # positive = improvement
-    adherence = patient.get("adherence_percent", 0)
+    adherence = patient.get("adherence_percent", 0) or 0
     # simple score 0-100
     score = min(100, max(0, int(
         adherence * 0.4 +
@@ -1427,7 +1457,6 @@ async def progress_evaluation(patient_id: str, user: TokenData = Depends(get_cur
     }
 
 
-
 # ---------- HTML pages ----------
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
@@ -1457,8 +1486,6 @@ async def patient_portal(request: Request):
 @app.get("/patient/exercise", response_class=HTMLResponse)
 async def exercise_page(request: Request):
     return templates.TemplateResponse(request, "exercise.html")
-
-
 
 
 @app.get("/chat", response_class=HTMLResponse)
@@ -1505,7 +1532,7 @@ def _chat_context_tools(db: dict, user: TokenData, patient: Optional[dict], mess
         return {"available_tools": ["exercise_guidance"], "patient_context": None}
     pid = patient.get("id")
     sessions = [s for s in db.get("sessions", []) if s.get("patient_id") == pid]
-    sessions.sort(key=lambda x: x.get("created_at", x.get("date", "")))
+    sessions.sort(key=_ts)
     plans = [p for p in db.get("rehab_plans", []) if p.get("patient_id") == pid]
     assessments = [a for a in db.get("assessments", []) if a.get("patient_id") == pid]
     alerts = [a for a in db.get("patient_alerts", []) if a.get("patient_id") in (pid, patient.get("user_id"))]
@@ -1526,6 +1553,7 @@ def _chat_context_tools(db: dict, user: TokenData, patient: Optional[dict], mess
             "open_alerts": [{k: a.get(k) for k in ("alert_type", "message", "severity", "status", "created_at") if a.get(k) is not None} for a in alerts if a.get("status", "open") == "open"][-10:],
         },
     }
+
 
 def _is_pain_concern(message: str) -> tuple[bool, str]:
     text = message.lower()
