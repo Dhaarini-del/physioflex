@@ -206,10 +206,8 @@ function showLive(msg) {
   document.getElementById('liveFeed').classList.remove('hidden');
   setTimeout(() => document.getElementById('liveFeed').classList.add('hidden'), 8000);
 }
-connectRealtime('doctor', (msg) => {
-  document.getElementById('liveDot').textContent = '● live';
-  document.getElementById('liveDot').className = 'text-xs text-emerald-500';
-  if (msg.event) { showLive(msg.message || msg.event); async function loadMessages() {
+
+async function loadMessages() {
   try {
     const msgs = await api.getVoiceMessages();
     const box = document.getElementById('msgInbox');
@@ -227,9 +225,16 @@ connectRealtime('doctor', (msg) => {
     if (box) box.textContent = 'Could not load messages';
   }
 }
-load();
-loadMessages();
-setInterval(loadMessages, 10000); if (selectedPatientId) selectPatient(selectedPatientId); }
+
+connectRealtime('doctor', (msg) => {
+  document.getElementById('liveDot').textContent = '● live';
+  document.getElementById('liveDot').className = 'text-xs text-emerald-500';
+  if (msg.event) {
+    showLive(msg.message || msg.event);
+    loadMessages();
+    if (selectedPatientId) selectPatient(selectedPatientId);
+    else load();
+  }
 });
 
 
@@ -247,7 +252,13 @@ async function playVoice(msgId) {
 }
 
 async function load() {
-  dashboardData = await api.doctorDashboard();
+  try {
+    dashboardData = await api.doctorDashboard();
+  } catch (e) {
+    document.getElementById('patientList').innerHTML =
+      '<p class="text-sm text-red-500">Could not load dashboard: ' + e.message + '</p>';
+    return;
+  }
   document.getElementById('statPatients').textContent = dashboardData.patient_count;
   document.getElementById('statAlerts').textContent = dashboardData.active_alerts.length;
   document.getElementById('statSessions').textContent = dashboardData.recent_sessions.length;
@@ -265,6 +276,7 @@ async function load() {
 async function selectPatient(id) {
   selectedPatientId = id;
   await load();
+  if (!dashboardData) return;
   const p = dashboardData.patients.find(x => x.id === id);
   if (!p) return;
   document.getElementById('detailEmpty').classList.add('hidden');
@@ -478,6 +490,8 @@ async function sendPatientMsg() {
 }
 
 load();
+loadMessages();
+setInterval(loadMessages, 10000);
 </script>
 
 <link rel="stylesheet" href="/static/chat-widget.css">
