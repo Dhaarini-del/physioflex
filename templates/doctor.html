@@ -410,6 +410,7 @@ async function savePatient() {
 async function deletePatient() {
   if (!selectedPatientId || !confirm('Delete this patient?')) return;
   await api.deletePatient(selectedPatientId);
+  await api.deleteCredentialRequest(requestId);
   selectedPatientId = null;
   document.getElementById('detailPanel').classList.add('hidden');
   document.getElementById('detailEmpty').classList.remove('hidden');
