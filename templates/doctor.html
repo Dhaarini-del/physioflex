@@ -29,6 +29,22 @@
     </div>
     <div id="liveFeed" class="mb-4 hidden"><div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-sm text-amber-800" id="liveMsg"></div></div>
 
+<div class="card p-5 mb-6">
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+    <div>
+      <h2 class="font-semibold">Pending &amp; Rejected Login Requests</h2>
+      <p class="text-sm text-slate-500">
+        Remove pending or rejected credential requests without deleting clinical records.
+      </p>
+    </div>
+    <button onclick="loadCredentialRequests()" class="btn-secondary text-sm">
+      Refresh
+    </button>
+  </div>
+  <div id="credentialRequestsList" class="space-y-3">
+    <p class="text-sm text-slate-400">Loading requests…</p>
+  </div>
+</div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
       <div class="card p-4"><div class="text-sm text-slate-500">Patients</div><div id="statPatients" class="text-2xl font-bold mt-1">–</div></div>
       <div class="card p-4"><div class="text-sm text-slate-500">Alerts</div><div id="statAlerts" class="text-2xl font-bold mt-1 text-amber-600">–</div></div>
