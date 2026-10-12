@@ -20,7 +20,7 @@ from pathlib import Path
 from database import get_db, save_db, generate_id, seed_if_empty, _now, append_event
 from auth import (
     verify_password, create_access_token, get_current_user,
-    require_role, TokenData, UserOut,
+    require_role, TokenData, UserOut, decode_token,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -71,11 +71,19 @@ class ConnectionManager:
             self.by_patient[patient_id].remove(websocket)
 
     async def broadcast_roles(self, roles: list, message: dict):
+        """
+        Role sockets are not patient-specific, so never send clinical payloads here.
+        Clients should refetch through the authenticated, patient-scoped REST API.
+        """
+        safe_message = {
+            "event": message.get("event", "update"),
+            "message": "Data updated. Refresh authorized records.",
+        }
         dead = []
         for role in roles:
             for ws in list(self.by_role.get(role, [])):
                 try:
-                    await ws.send_json(message)
+                    await ws.send_json(safe_message)
                 except Exception:
                     dead.append((role, ws))
         for role, ws in dead:
@@ -145,6 +153,8 @@ async def list_exercises(user: TokenData = Depends(get_current_user)):
 
 # ---------- Patients CRUD ----------
 def _can_access_patient(user: TokenData, patient: dict) -> bool:
+    if user.role == "admin":
+        return True
     if user.role == "patient":
         return patient.get("user_id") == user.user_id or patient.get("id") == user.user_id
     if user.role == "doctor":
@@ -175,18 +185,15 @@ async def list_patients(user: TokenData = Depends(get_current_user)):
         return [p for p in patients if p.get("physio_id") == user.user_id]
     if user.role == "patient":
         return [p for p in patients if p.get("user_id") == user.user_id or p.get("id") == user.user_id]
+    if user.role == "admin":
+        return patients
     return []
 
 
 @app.get("/api/patients/{patient_id}")
 async def get_patient(patient_id: str, user: TokenData = Depends(get_current_user)):
     db = get_db()
-    patient = _find_patient(db, patient_id)
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    if not _can_access_patient(user, patient):
-        raise HTTPException(status_code=403, detail="Access denied")
-    return patient
+    return _require_patient_access(db, user, patient_id)
 
 
 class PatientCreate(BaseModel):
@@ -301,6 +308,10 @@ async def update_patient(
     if not _can_access_patient(user, patient):
         raise HTTPException(status_code=403, detail="Access denied")
     data = body.dict(exclude_unset=True)
+    # Assignment changes are admin-controlled; a clinician must not reassign
+    # a patient by submitting doctor_id/physio_id in this general update route.
+    if "doctor_id" in data or "physio_id" in data:
+        raise HTTPException(status_code=403, detail="Patient assignments can only be changed by an administrator")
     for k, v in data.items():
         if v is not None:
             patient[k] = v
@@ -451,6 +462,9 @@ async def update_plan(
     plan = next((p for p in db["rehab_plans"] if p.get("id") == plan_id), None)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
+    patient = _require_patient_access(db, user, plan.get("patient_id", ""))
+    if plan.get("physio_id") != user.user_id or patient.get("physio_id") != user.user_id:
+        raise HTTPException(status_code=403, detail="You may only modify plans for your assigned patients")
     data = body.dict(exclude_unset=True)
     if "exercises" in data and data["exercises"] is not None:
         plan["exercises"] = [e if isinstance(e, dict) else e.dict() for e in data["exercises"]]
@@ -476,6 +490,9 @@ async def delete_plan(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     pid = plan.get("patient_id")
+    patient = _require_patient_access(db, user, pid or "")
+    if plan.get("physio_id") != user.user_id or patient.get("physio_id") != user.user_id:
+        raise HTTPException(status_code=403, detail="You may only delete plans for your assigned patients")
     db["rehab_plans"] = [p for p in db["rehab_plans"] if p.get("id") != plan_id]
     save_db(db)
     await manager.broadcast_roles(["doctor", "physiotherapist", "patient"], {
@@ -495,6 +512,7 @@ async def get_sessions(patient_id: str, user: TokenData = Depends(get_current_us
 
 
 class SessionCreate(BaseModel):
+    patient_id: Optional[str] = None
     plan_id: str
     exercise_id: str
     exercise_name: str
@@ -516,13 +534,38 @@ async def create_session(
 ):
     db = get_db()
     if user.role == "patient":
-        patient_id = user.user_id
-        # map user_id to patient id
-        pmatch = next((p for p in db["patients"] if p.get("user_id") == user.user_id or p.get("id") == user.user_id), None)
-        if pmatch:
-            patient_id = pmatch["id"]
+        patient = next(
+            (p for p in db.get("patients", [])
+             if p.get("user_id") == user.user_id or p.get("id") == user.user_id),
+            None,
+        )
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient profile not found")
+        patient_id = patient["id"]
     else:
-        patient_id = "pat001"
+        patient_id = (body.patient_id or "").strip()
+        if not patient_id:
+            raise HTTPException(status_code=422, detail="patient_id is required for physiotherapist-created sessions")
+        patient = _require_patient_access(db, user, patient_id)
+
+    plan = next((p for p in db.get("rehab_plans", []) if p.get("id") == body.plan_id), None)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Rehabilitation plan not found")
+    if plan.get("patient_id") != patient_id:
+        raise HTTPException(status_code=403, detail="This plan does not belong to the selected patient")
+    if user.role == "patient" and plan.get("status") != "active":
+        raise HTTPException(status_code=403, detail="Only active rehabilitation plans can be completed")
+    prescribed = plan.get("exercises") or []
+    if prescribed and not any(
+        (e.get("exercise_id") == body.exercise_id or e.get("id") == body.exercise_id)
+        and (not e.get("name") or e.get("name") == body.exercise_name)
+        for e in prescribed if isinstance(e, dict)
+    ):
+        raise HTTPException(status_code=403, detail="Exercise is not included in this rehabilitation plan")
+    if user.role == "physiotherapist" and (
+        plan.get("physio_id") != user.user_id or patient.get("physio_id") != user.user_id
+    ):
+        raise HTTPException(status_code=403, detail="You may only record sessions for your assigned patients and plans")
 
     session = {
         "id": generate_id("ses"),
@@ -584,6 +627,9 @@ async def delete_session(
     if not ses:
         raise HTTPException(status_code=404, detail="Session not found")
     pid = ses.get("patient_id")
+    patient = _require_patient_access(db, user, pid or "")
+    if user.role != "admin" and not _can_access_patient(user, patient):
+        raise HTTPException(status_code=403, detail="Access denied")
     db["sessions"] = [s for s in db["sessions"] if s.get("id") != session_id]
     save_db(db)
     await manager.broadcast_roles(["doctor", "physiotherapist"], {
@@ -648,7 +694,11 @@ async def doctor_dashboard(user: TokenData = Depends(require_role("doctor"))):
         [s for s in db.get("sessions", []) if s.get("patient_id") in ids],
         key=_ts, reverse=True,
     )[:15]
-    events = sorted(db.get("events", []), key=_ts, reverse=True)[:20]
+    events = sorted(
+        [e for e in db.get("events", [])
+         if not e.get("patient_id") or e.get("patient_id") in ids],
+        key=_ts, reverse=True,
+    )[:20]
     return {
         "patient_count": len(patients),
         "patients": patients,
@@ -714,36 +764,65 @@ async def get_progress(patient_id: str, user: TokenData = Depends(get_current_us
 # ---------- WebSocket real-time ----------
 @app.websocket("/ws/{role}")
 async def websocket_role(websocket: WebSocket, role: str):
-    """Connect as doctor | physiotherapist | patient for live updates."""
+    """Authenticated role notifications. Clinical data must be refetched via REST."""
+    token = websocket.query_params.get("token")
+    try:
+        auth_user = decode_token(token or "")
+        db = get_db()
+        active_user = next((u for u in db.get("users", []) if u.get("id") == auth_user.user_id and u.get("active", True)), None)
+        if not active_user or auth_user.role != role or role not in ("doctor", "physiotherapist", "patient", "admin"):
+            await websocket.close(code=1008)
+            return
+    except Exception:
+        await websocket.close(code=1008)
+        return
+
     await manager.connect(websocket, role)
     try:
         while True:
             data = await websocket.receive_json()
-            # allow clients to ping / subscribe to patient
-            if data.get("type") == "subscribe_patient":
-                pid = data.get("patient_id")
-                if pid:
-                    manager.by_patient.setdefault(pid, []).append(websocket)
-            elif data.get("type") == "ping":
+            if data.get("type") == "ping":
                 await websocket.send_json({"event": "pong"})
+            # Arbitrary patient subscriptions are intentionally not accepted.
     except WebSocketDisconnect:
         manager.disconnect(websocket, role)
 
 
 @app.websocket("/ws/session/{patient_id}")
 async def websocket_session(websocket: WebSocket, patient_id: str):
-    await manager.connect(websocket, "patient", patient_id)
+    """Authenticated patient live metrics; never trusts a client-supplied identity."""
+    token = websocket.query_params.get("token")
+    try:
+        auth_user = decode_token(token or "")
+        db = get_db()
+        patient = _require_patient_access(db, auth_user, patient_id)
+        active_user = next((u for u in db.get("users", []) if u.get("id") == auth_user.user_id and u.get("active", True)), None)
+        if not active_user or auth_user.role not in ("patient", "doctor", "physiotherapist"):
+            await websocket.close(code=1008)
+            return
+        if auth_user.role == "patient" and not (
+            patient.get("user_id") == auth_user.user_id or patient.get("id") == auth_user.user_id
+        ):
+            await websocket.close(code=1008)
+            return
+    except Exception:
+        await websocket.close(code=1008)
+        return
+
+    await manager.connect(websocket, auth_user.role, patient_id)
     try:
         while True:
             data = await websocket.receive_json()
-            # live metrics during exercise → broadcast to clinicians
-            await manager.broadcast_roles(["doctor", "physiotherapist"], {
-                "event": "live_metrics",
-                "patient_id": patient_id,
-                "data": data,
-            })
+            if auth_user.role == "patient":
+                # Do not relay arbitrary client payloads as clinical measurements.
+                # A future live-metrics endpoint should validate a typed schema first.
+                await manager.broadcast_roles(["doctor", "physiotherapist"], {
+                    "event": "live_metrics_received",
+                })
+            elif data.get("type") == "ping":
+                await websocket.send_json({"event": "pong"})
     except WebSocketDisconnect:
-        manager.disconnect(websocket, "patient", patient_id)
+        manager.disconnect(websocket, auth_user.role, patient_id)
 
 
 @app.get("/api/admin/credential-requests")
@@ -1095,7 +1174,9 @@ async def list_schedules(user: TokenData = Depends(get_current_user)):
     db = get_db()
     items = db.get("schedules", [])
     if user.role == "patient":
-        pid = user.user_id
+        patient = next((p for p in db.get("patients", [])
+                        if p.get("user_id") == user.user_id or p.get("id") == user.user_id), None)
+        pid = patient.get("id") if patient else None
         return [s for s in items if s.get("patient_id") == pid]
     if user.role == "doctor":
         pids = {p.get("id") for p in db["patients"] if p.get("doctor_id") == user.user_id}
@@ -1110,6 +1191,7 @@ async def list_schedules(user: TokenData = Depends(get_current_user)):
 async def create_schedule(body: ScheduleCreate, user: TokenData = Depends(require_role("doctor", "physiotherapist", "admin"))):
     db = get_db()
     db.setdefault("schedules", [])
+    _require_patient_access(db, user, body.patient_id)
     item = {
         "id": generate_id("sch"),
         "patient_id": body.patient_id,
@@ -1152,14 +1234,22 @@ async def list_suggestions(user: TokenData = Depends(get_current_user)):
         pids = {p.get("id") for p in db["patients"] if p.get("physio_id") == user.user_id}
         return [s for s in items if s.get("patient_id") in pids]
     if user.role == "patient":
-        return [s for s in items if s.get("patient_id") == user.user_id]
-    return items
+        patient = next((p for p in db.get("patients", [])
+                        if p.get("user_id") == user.user_id or p.get("id") == user.user_id), None)
+        pid = patient.get("id") if patient else None
+        return [s for s in items if s.get("patient_id") == pid]
+    if user.role == "admin":
+        return items
+    return []
 
 
 @app.post("/api/suggestions")
 async def create_suggestion(body: SuggestionCreate, user: TokenData = Depends(require_role("doctor"))):
     db = get_db()
     db.setdefault("suggestions", [])
+    patient = _require_patient_access(db, user, body.patient_id)
+    if patient.get("doctor_id") != user.user_id:
+        raise HTTPException(status_code=403, detail="You may only create suggestions for your assigned patients")
     item = {
         "id": generate_id("sug"),
         "patient_id": body.patient_id,
@@ -1203,7 +1293,10 @@ async def list_patient_alerts(user: TokenData = Depends(get_current_user)):
     db = get_db()
     items = db.get("patient_alerts", [])
     if user.role == "patient":
-        return [a for a in items if a.get("patient_id") == user.user_id]
+        patient = next((p for p in db.get("patients", [])
+                        if p.get("user_id") == user.user_id or p.get("id") == user.user_id), None)
+        pid = patient.get("id") if patient else None
+        return [a for a in items if a.get("patient_id") == pid]
     if user.role == "doctor":
         pids = {p.get("id") for p in db["patients"] if p.get("doctor_id") == user.user_id}
         return [a for a in items if a.get("patient_id") in pids]
@@ -1217,9 +1310,13 @@ async def list_patient_alerts(user: TokenData = Depends(get_current_user)):
 async def create_patient_alert(body: PatientAlertCreate, user: TokenData = Depends(require_role("patient"))):
     db = get_db()
     db.setdefault("patient_alerts", [])
+    patient = next((p for p in db.get("patients", [])
+                    if p.get("user_id") == user.user_id or p.get("id") == user.user_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found")
     item = {
         "id": generate_id("pal"),
-        "patient_id": user.user_id,
+        "patient_id": patient["id"],
         "alert_type": body.alert_type,
         "message": body.message,
         "severity": body.severity,
@@ -1229,8 +1326,8 @@ async def create_patient_alert(body: PatientAlertCreate, user: TokenData = Depen
     db["patient_alerts"].append(item)
     save_db(db)
     await manager.broadcast_roles(["doctor", "physiotherapist"], {
-        "event": "patient_alert", "patient_id": user.user_id, "data": item,
-        "message": f"Patient alert ({body.alert_type}): {body.message[:80]}",
+        "event": "patient_alert",
+        "message": "A patient submitted an alert. Refresh authorized records.",
     })
     return item
 
@@ -1248,19 +1345,34 @@ async def list_bookings(user: TokenData = Depends(get_current_user)):
     db = get_db()
     items = db.get("bookings", [])
     if user.role == "patient":
-        return [b for b in items if b.get("patient_id") == user.user_id]
-    if user.role in ("doctor", "physiotherapist"):
-        return [b for b in items if b.get("with_role") == user.role or b.get("assigned_to") == user.user_id]
-    return items
+        patient = next((p for p in db.get("patients", [])
+                        if p.get("user_id") == user.user_id or p.get("id") == user.user_id), None)
+        pid = patient.get("id") if patient else None
+        return [b for b in items if b.get("patient_id") == pid]
+    if user.role == "doctor":
+        pids = {p.get("id") for p in db.get("patients", []) if p.get("doctor_id") == user.user_id}
+        return [b for b in items if b.get("patient_id") in pids and (b.get("with_role") == user.role or b.get("assigned_to") == user.user_id)]
+    if user.role == "physiotherapist":
+        pids = {p.get("id") for p in db.get("patients", []) if p.get("physio_id") == user.user_id}
+        return [b for b in items if b.get("patient_id") in pids and (b.get("with_role") == user.role or b.get("assigned_to") == user.user_id)]
+    if user.role == "admin":
+        return items
+    return []
 
 
 @app.post("/api/bookings")
 async def create_booking(body: BookingCreate, user: TokenData = Depends(require_role("patient"))):
+    if body.with_role not in ("doctor", "physiotherapist"):
+        raise HTTPException(status_code=422, detail="with_role must be doctor or physiotherapist")
     db = get_db()
+    patient = next((p for p in db.get("patients", [])
+                    if p.get("user_id") == user.user_id or p.get("id") == user.user_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found")
     db.setdefault("bookings", [])
     item = {
         "id": generate_id("bk"),
-        "patient_id": user.user_id,
+        "patient_id": patient["id"],
         "with_role": body.with_role,
         "preferred_datetime": body.preferred_datetime,
         "reason": body.reason,
@@ -1272,8 +1384,8 @@ async def create_booking(body: BookingCreate, user: TokenData = Depends(require_
     save_db(db)
     roles = ["doctor"] if body.with_role == "doctor" else ["physiotherapist"]
     await manager.broadcast_roles(roles + ["patient"], {
-        "event": "booking_requested", "patient_id": user.user_id, "data": item,
-        "message": f"Live session requested with {body.with_role}",
+        "event": "booking_requested",
+        "message": f"New live session request for {body.with_role}.",
     })
     return item
 
@@ -1290,6 +1402,13 @@ async def update_booking(booking_id: str, body: BookingUpdate, user: TokenData =
     b = next((x for x in db.get("bookings", []) if x.get("id") == booking_id), None)
     if not b:
         raise HTTPException(status_code=404, detail="Booking not found")
+    patient = _require_patient_access(db, user, b.get("patient_id", ""))
+    if user.role != "admin" and not (
+        user.role == b.get("with_role") and _can_access_patient(user, patient)
+    ):
+        raise HTTPException(status_code=403, detail="You may only update bookings for your assigned patients")
+    if body.status not in ("requested", "confirmed", "completed", "cancelled"):
+        raise HTTPException(status_code=422, detail="Invalid booking status")
     b["status"] = body.status
     if body.assigned_to:
         b["assigned_to"] = body.assigned_to
@@ -1298,7 +1417,8 @@ async def update_booking(booking_id: str, body: BookingUpdate, user: TokenData =
     b["updated_at"] = _now()
     save_db(db)
     await manager.broadcast_roles(["patient", "doctor", "physiotherapist"], {
-        "event": "booking_updated", "patient_id": b.get("patient_id"), "data": b,
+        "event": "booking_updated",
+        "message": "Booking status updated. Refresh authorized records.",
     })
     return b
 
