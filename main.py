@@ -844,9 +844,17 @@ async def websocket_session(websocket: WebSocket, patient_id: str):
 
 
 @app.get("/api/admin/credential-requests")
-async def list_credential_requests(user: TokenData = Depends(require_role("admin"))):
+async def list_credential_requests(
+    user: TokenData = Depends(
+        require_role("admin", "doctor", "physiotherapist")
+    ),
+):
     db = get_db()
-    return sorted(db.get("credential_requests", []), key=_ts, reverse=True)
+    return sorted(
+        db.get("credential_requests", []),
+        key=_ts,
+        reverse=True,
+    )
 
 
 class ProvisionCredentials(BaseModel):
