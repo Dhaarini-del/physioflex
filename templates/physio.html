@@ -28,6 +28,28 @@
     </div>
     <div id="liveFeed" class="mb-4 hidden"><div class="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2 text-sm" id="liveMsg"></div></div>
 
+<!-- Credential Requests -->
+<div class="card p-5 mb-6">
+  <div class="flex items-center justify-between gap-3 mb-3">
+    <div>
+      <h2 class="font-semibold">Pending & Rejected Login Requests</h2>
+      <p class="text-xs text-slate-500 mt-1">
+        Remove pending or rejected credential requests.
+      </p>
+    </div>
+    <button
+      type="button"
+      onclick="loadCredentialRequests()"
+      class="btn-secondary text-sm"
+    >
+      Refresh
+    </button>
+  </div>
+
+  <div id="credentialRequestList" class="space-y-3">
+    <p class="text-sm text-slate-400">Loading requests…</p>
+  </div>
+</div>
     <div class="grid lg:grid-cols-3 gap-6">
       <div class="space-y-6">
         <div class="card p-5">
