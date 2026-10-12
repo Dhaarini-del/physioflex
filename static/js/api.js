@@ -1,37 +1,91 @@
+
 /**
- * PhysioFlex frontend API client + real-time WebSocket
+ * PhysioFlex frontend API client + authenticated real-time WebSocket
+ *
+ * REST authentication: Authorization: Bearer <token>
+ * WebSocket authentication: ?token=<JWT>
+ *
+ * IMPORTANT:
+ * The backend must validate the WebSocket JWT and verify that the
+ * requested role matches the authenticated user's actual role.
  */
+
 const api = {
   base: '',
 
+  /**
+   * Common REST API request handler.
+   */
   async request(path, options = {}) {
     const token = localStorage.getItem('token');
-    const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    const res = await fetch(this.base + path, { ...options, headers });
+    const headers = {
+      ...(options.body !== undefined &&
+      !(options.body instanceof FormData)
+        ? { 'Content-Type': 'application/json' }
+        : {}),
+      ...(options.headers || {}),
+    };
 
-    if (res.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
-      throw new Error('Session expired');
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
     }
 
-    const data = await res.json().catch(() => ({}));
+    let response;
 
-    if (!res.ok) {
-      throw new Error(data.detail || res.statusText || 'Request failed');
+    try {
+      response = await fetch(`${this.base}${path}`, {
+        ...options,
+        headers,
+      });
+    } catch (error) {
+      throw new Error(
+        'Unable to connect to the PhysioFlex server. Check your internet connection and try again.'
+      );
+    }
+
+    if (response.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+
+      if (window.location.pathname !== '/login') {
+        window.location.replace('/login');
+      }
+
+      throw new Error('Session expired. Please sign in again.');
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    let data;
+
+    if (contentType.includes('application/json')) {
+      data = await response.json().catch(() => ({}));
+    } else {
+      data = await response.text().catch(() => '');
+    }
+
+    if (!response.ok) {
+      const message =
+        typeof data === 'object' && data !== null
+          ? data.detail || data.message
+          : data;
+
+      throw new Error(
+        message || `Request failed with status ${response.status}`
+      );
     }
 
     return data;
   },
 
+  // --------------------------------------------------
   // Authentication
+  // --------------------------------------------------
+
   login(email, password) {
     return this.request('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, password }),
     });
   },
 
@@ -39,7 +93,10 @@ const api = {
     return this.request('/api/auth/me');
   },
 
+  // --------------------------------------------------
   // Dashboards
+  // --------------------------------------------------
+
   doctorDashboard() {
     return this.request('/api/dashboard/doctor');
   },
@@ -52,117 +109,173 @@ const api = {
     return this.request('/api/dashboard/patient');
   },
 
+  // --------------------------------------------------
   // Patients
+  // --------------------------------------------------
+
   getPatients() {
     return this.request('/api/patients');
   },
 
   getPatient(id) {
-    return this.request(`/api/patients/${id}`);
+    return this.request(`/api/patients/${encodeURIComponent(id)}`);
   },
 
   createPatient(body) {
     return this.request('/api/patients', {
       method: 'POST',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
   updatePatient(id, body) {
-    return this.request(`/api/patients/${id}`, {
+    return this.request(`/api/patients/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
   deletePatient(id) {
-    return this.request(`/api/patients/${id}`, {
-      method: 'DELETE'
+    return this.request(`/api/patients/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
     });
   },
 
+  // --------------------------------------------------
   // Exercises
+  // --------------------------------------------------
+
   getExercises() {
     return this.request('/api/exercises');
   },
 
+  // --------------------------------------------------
   // Assessments
+  // --------------------------------------------------
+
   getAssessments(patientId) {
-    return this.request(`/api/patients/${patientId}/assessments`);
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/assessments`
+    );
   },
 
   createAssessment(patientId, body) {
-    return this.request(`/api/patients/${patientId}/assessments`, {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/assessments`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }
+    );
   },
 
+  // --------------------------------------------------
   // Rehabilitation Plans
+  // --------------------------------------------------
+
   getPlans(patientId) {
-    return this.request(`/api/patients/${patientId}/plans`);
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/plans`
+    );
   },
 
   createPlan(patientId, body) {
-    return this.request(`/api/patients/${patientId}/plans`, {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/plans`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }
+    );
   },
 
   updatePlan(planId, body) {
-    return this.request(`/api/plans/${planId}`, {
+    return this.request(`/api/plans/${encodeURIComponent(planId)}`, {
       method: 'PUT',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
   deletePlan(planId) {
-    return this.request(`/api/plans/${planId}`, {
-      method: 'DELETE'
+    return this.request(`/api/plans/${encodeURIComponent(planId)}`, {
+      method: 'DELETE',
     });
   },
 
-  // Sessions
+  // --------------------------------------------------
+  // Exercise Sessions
+  // --------------------------------------------------
+
   getSessions(patientId) {
-    return this.request(`/api/patients/${patientId}/sessions`);
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/sessions`
+    );
   },
 
   createSession(body) {
     return this.request('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
   deleteSession(id) {
-    return this.request(`/api/sessions/${id}`, {
-      method: 'DELETE'
+    return this.request(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
     });
   },
 
-  // Notes
+  // --------------------------------------------------
+  // Clinical Notes
+  // --------------------------------------------------
+
   getNotes(patientId) {
-    return this.request(`/api/patients/${patientId}/notes`);
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/notes`
+    );
   },
 
   createNote(patientId, content) {
-    return this.request(`/api/patients/${patientId}/notes`, {
-      method: 'POST',
-      body: JSON.stringify({ content })
-    });
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/notes`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      }
+    );
   },
 
-  // Alerts & Progress
+  // --------------------------------------------------
+  // Alerts and Progress
+  // --------------------------------------------------
+
   getAlerts(patientId) {
-    return this.request(`/api/patients/${patientId}/alerts`);
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/alerts`
+    );
   },
 
   getProgress(patientId) {
-    return this.request(`/api/patients/${patientId}/progress`);
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/progress`
+    );
   },
 
-  // Admin
+  getPatientAlerts() {
+    return this.request('/api/patient-alerts');
+  },
+
+  createPatientAlert(body) {
+    return this.request('/api/patient-alerts', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  // --------------------------------------------------
+  // Administrator
+  // --------------------------------------------------
+
   adminStats() {
     return this.request('/api/admin/stats');
   },
@@ -174,49 +287,54 @@ const api = {
   adminCreateUser(body) {
     return this.request('/api/admin/users', {
       method: 'POST',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
   adminUpdateUser(id, body) {
-    return this.request(`/api/admin/users/${id}`, {
+    return this.request(`/api/admin/users/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
   adminDeleteUser(id) {
-    return this.request(`/api/admin/users/${id}`, {
-      method: 'DELETE'
+    return this.request(`/api/admin/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
     });
   },
 
+  // --------------------------------------------------
   // Credential Requests
+  // --------------------------------------------------
+
   credentialRequests() {
     return this.request('/api/admin/credential-requests');
   },
 
   provisionCredentials(reqId, body) {
     return this.request(
-      `/api/admin/credential-requests/${reqId}/provision`,
+      `/api/admin/credential-requests/${encodeURIComponent(reqId)}/provision`,
       {
         method: 'POST',
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
       }
     );
   },
 
-  // NEW: Reject/Delete pending credential request
   deleteCredentialRequest(reqId) {
     return this.request(
-      `/api/admin/credential-requests/${reqId}`,
+      `/api/admin/credential-requests/${encodeURIComponent(reqId)}`,
       {
-        method: 'DELETE'
+        method: 'DELETE',
       }
     );
   },
 
+  // --------------------------------------------------
   // Complaints
+  // --------------------------------------------------
+
   getComplaints() {
     return this.request('/api/complaints');
   },
@@ -224,18 +342,21 @@ const api = {
   createComplaint(body) {
     return this.request('/api/complaints', {
       method: 'POST',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
   updateComplaint(id, body) {
-    return this.request(`/api/complaints/${id}`, {
+    return this.request(`/api/complaints/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
+  // --------------------------------------------------
   // Schedules
+  // --------------------------------------------------
+
   getSchedules() {
     return this.request('/api/schedules');
   },
@@ -243,11 +364,14 @@ const api = {
   createSchedule(body) {
     return this.request('/api/schedules', {
       method: 'POST',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
-  // Suggestions
+  // --------------------------------------------------
+  // Physiotherapy Suggestions
+  // --------------------------------------------------
+
   getSuggestions() {
     return this.request('/api/suggestions');
   },
@@ -255,23 +379,14 @@ const api = {
   createSuggestion(body) {
     return this.request('/api/suggestions', {
       method: 'POST',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
-  // Patient Alerts
-  getPatientAlerts() {
-    return this.request('/api/patient-alerts');
-  },
-
-  createPatientAlert(body) {
-    return this.request('/api/patient-alerts', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-  },
-
+  // --------------------------------------------------
   // Bookings
+  // --------------------------------------------------
+
   getBookings() {
     return this.request('/api/bookings');
   },
@@ -279,18 +394,21 @@ const api = {
   createBooking(body) {
     return this.request('/api/bookings', {
       method: 'POST',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
   updateBooking(id, body) {
-    return this.request(`/api/bookings/${id}`, {
+    return this.request(`/api/bookings/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
+  // --------------------------------------------------
   // Voice Messages
+  // --------------------------------------------------
+
   getVoiceMessages() {
     return this.request('/api/voice-messages');
   },
@@ -298,44 +416,59 @@ const api = {
   createVoiceMessage(body) {
     return this.request('/api/voice-messages', {
       method: 'POST',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   },
 
   getVoiceAudio(id) {
-    return this.request(`/api/voice-messages/${id}/audio`);
+    return this.request(
+      `/api/voice-messages/${encodeURIComponent(id)}/audio`
+    );
   },
 
+  // --------------------------------------------------
   // Evaluation
+  // --------------------------------------------------
+
   getEvaluation(patientId) {
-    return this.request(`/api/patients/${patientId}/evaluation`);
+    return this.request(
+      `/api/patients/${encodeURIComponent(patientId)}/evaluation`
+    );
   },
 };
 
 
-/**
- * Authentication / Role Protection
- */
+// ==================================================
+// Authentication and frontend role-based navigation
+// ==================================================
+
 function requireAuth(allowedRoles = []) {
   const token = localStorage.getItem('token');
-  const user = JSON.parse(localStorage.getItem('user') || 'null');
 
-  if (!token || !user) {
-    window.location.href = '/login';
+  let user = null;
+
+  try {
+    user = JSON.parse(localStorage.getItem('user') || 'null');
+  } catch {
+    user = null;
+  }
+
+  if (!token || !user || !user.role) {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    window.location.replace('/login');
     return null;
   }
 
   if (allowedRoles.length && !allowedRoles.includes(user.role)) {
-    if (user.role === 'admin') {
-      window.location.href = '/admin';
-    } else if (user.role === 'doctor') {
-      window.location.href = '/doctor';
-    } else if (user.role === 'physiotherapist') {
-      window.location.href = '/physio';
-    } else {
-      window.location.href = '/patient';
-    }
+    const roleRoutes = {
+      admin: '/admin',
+      doctor: '/doctor',
+      physiotherapist: '/physio',
+      patient: '/patient',
+    };
 
+    window.location.replace(roleRoutes[user.role] || '/login');
     return null;
   }
 
@@ -343,54 +476,215 @@ function requireAuth(allowedRoles = []) {
 }
 
 
-/**
- * Logout
- */
+// ==================================================
+// Logout
+// ==================================================
+
 function logout() {
   localStorage.removeItem('token');
   localStorage.removeItem('user');
-  window.location.href = '/login';
+  window.location.replace('/login');
 }
 
 
-/**
- * Real-time WebSocket helper
- */
-function connectRealtime(role, onEvent) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+// ==================================================
+// Authenticated real-time WebSocket
+// ==================================================
 
-  const ws = new WebSocket(
-    `${proto}://${location.host}/ws/${role}`
+/**
+ * Connect to the authenticated role-specific WebSocket.
+ *
+ * Backend requirement:
+ * The endpoint /ws/{role} must:
+ * 1. Read the "token" query parameter.
+ * 2. Validate the JWT using the same secret and algorithm as auth.py.
+ * 3. Check the actual authenticated role against the requested role.
+ * 4. Reject unauthorized connections.
+ *
+ * Returns the WebSocket, or null if no token exists.
+ */
+function connectRealtime(role, onEvent, options = {}) {
+  const allowedRoles = [
+    'doctor',
+    'physiotherapist',
+    'patient',
+    'admin',
+  ];
+
+  if (!allowedRoles.includes(role)) {
+    console.error('Invalid WebSocket role');
+    return null;
+  }
+
+  const token = localStorage.getItem('token');
+
+  if (!token) {
+    console.warn('WebSocket not connected: login token is missing');
+    return null;
+  }
+
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socketUrl = new URL(
+    `${scheme}//${window.location.host}/ws/${encodeURIComponent(role)}`
   );
 
-  ws.onopen = () => {
-    console.log('WS connected as', role);
-  };
+  // The backend must explicitly support token-based WebSocket authentication.
+  socketUrl.searchParams.set('token', token);
 
-  ws.onmessage = (ev) => {
-    try {
-      const msg = JSON.parse(ev.data);
+  const reconnect = options.reconnect !== false;
+  const reconnectDelay = Math.max(options.reconnectDelay || 5000, 1000);
 
-      if (onEvent) {
-        onEvent(msg);
-      }
-    } catch (e) {}
-  };
+  let stopped = false;
+  let socket = null;
+  let reconnectTimer = null;
+  let keepAliveTimer = null;
+  let retryCount = 0;
 
-  ws.onclose = () => {
-    console.log('WS closed – reconnect in 3s');
-
-    setTimeout(() => {
-      connectRealtime(role, onEvent);
-    }, 3000);
-  };
-
-  // Keepalive
-  setInterval(() => {
-    if (ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: 'ping' }));
+  function clearTimers() {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
-  }, 25000);
 
-  return ws;
+    if (keepAliveTimer !== null) {
+      clearInterval(keepAliveTimer);
+      keepAliveTimer = null;
+    }
+  }
+
+  function connect() {
+    if (stopped || !localStorage.getItem('token')) {
+      return;
+    }
+
+    try {
+      socket = new WebSocket(socketUrl.toString());
+    } catch (error) {
+      console.error('Could not create WebSocket connection', error);
+      scheduleReconnect();
+      return;
+    }
+
+    socket.onopen = () => {
+      retryCount = 0;
+      console.info(`PhysioFlex realtime connected (${role})`);
+
+      if (typeof options.onOpen === 'function') {
+        options.onOpen(socket);
+      }
+
+      keepAliveTimer = setInterval(() => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          // This requires backend support for receiving client ping messages.
+          socket.send(JSON.stringify({ type: 'ping' }));
+        }
+      }, 25000);
+    };
+
+    socket.onmessage = (event) => {
+      let message;
+
+      try {
+        message = JSON.parse(event.data);
+      } catch {
+        console.warn('Ignored malformed WebSocket message');
+        return;
+      }
+
+      if (typeof onEvent === 'function') {
+        try {
+          onEvent(message);
+        } catch (error) {
+          console.error('Realtime event handler failed', error);
+        }
+      }
+    };
+
+    socket.onerror = () => {
+      // Browsers intentionally provide limited WebSocket error details.
+      console.error('PhysioFlex WebSocket encountered an error');
+    };
+
+    socket.onclose = (event) => {
+      clearTimers();
+
+      console.info(
+        `PhysioFlex realtime disconnected (code ${event.code})`
+      );
+
+      if (typeof options.onClose === 'function') {
+        options.onClose(event);
+      }
+
+      // Do not endlessly retry authentication or policy failures.
+      // 1008 is policy violation; 4000–4999 are application-specific.
+      if (
+        event.code === 1008 ||
+        (event.code >= 4000 && event.code <= 4003)
+      ) {
+        console.error(
+          'WebSocket closed by the server. Check authentication and permissions.'
+        );
+        return;
+      }
+
+      scheduleReconnect();
+    };
+  }
+
+  function scheduleReconnect() {
+    if (stopped || !reconnect || reconnectTimer !== null) {
+      return;
+    }
+
+    if (!localStorage.getItem('token')) {
+      return;
+    }
+
+    retryCount += 1;
+
+    // Exponential backoff, capped at 30 seconds.
+    const delay = Math.min(
+      reconnectDelay * Math.pow(2, Math.min(retryCount - 1, 3)),
+      30000
+    );
+
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  }
+
+  connect();
+
+  // Return a WebSocket-like handle with an explicit stop method.
+  return {
+    get socket() {
+      return socket;
+    },
+
+    close() {
+      stopped = true;
+      clearTimers();
+
+      if (
+        socket &&
+        socket.readyState !== WebSocket.CLOSED &&
+        socket.readyState !== WebSocket.CLOSING
+      ) {
+        socket.close(1000, 'Client disconnected');
+      }
+    },
+
+    send(data) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          typeof data === 'string' ? data : JSON.stringify(data)
+        );
+        return true;
+      }
+
+      return false;
+    },
+  };
 }
