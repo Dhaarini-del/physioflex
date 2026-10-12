@@ -2,6 +2,7 @@
 PhysioFlex – AI & IoT Assisted Digital Physiotherapy Platform
 Full CRUD + real-time portal updates + dataset exercises
 """
+from bson import ObjectId
 from fastapi import FastAPI, Request, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -51,6 +52,24 @@ def _ts(item: dict) -> str:
 def _find_patient(db: dict, patient_id: str) -> Optional[dict]:
     return next((p for p in db.get("patients", []) if p.get("id") == patient_id), None)
 
+def _json_safe(value):
+    """Convert MongoDB values into JSON-serializable values."""
+    if isinstance(value, ObjectId):
+        return str(value)
+
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe(item)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+
+    return value
 
 # ---------- Real-time connection manager ----------
 class ConnectionManager:
@@ -699,14 +718,13 @@ async def doctor_dashboard(user: TokenData = Depends(require_role("doctor"))):
          if not e.get("patient_id") or e.get("patient_id") in ids],
         key=_ts, reverse=True,
     )[:20]
-    return {
+    return _json_safe({
         "patient_count": len(patients),
         "patients": patients,
         "active_alerts": alerts,
         "recent_sessions": sessions,
         "recent_events": events,
-    }
-
+    })
 
 @app.get("/api/dashboard/physio")
 async def physio_dashboard(user: TokenData = Depends(require_role("physiotherapist"))):
