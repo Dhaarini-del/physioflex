@@ -400,6 +400,89 @@ async function submitComplaint() {
   document.getElementById('complaintModal').classList.add('hidden');
 }
 
+async function loadCredentialRequests() {
+  const box = document.getElementById('credentialRequestList');
+  if (!box) return;
+
+  box.textContent = 'Loading requests…';
+
+  try {
+    const requests = await api.credentialRequests();
+
+    const eligible = (Array.isArray(requests) ? requests : []).filter(r =>
+      ['pending', 'rejected'].includes(
+        String(r.status || '').toLowerCase()
+      )
+    );
+
+    if (!eligible.length) {
+      box.innerHTML =
+        '<p class="text-sm text-slate-400">No pending or rejected requests.</p>';
+      return;
+    }
+
+    box.innerHTML = eligible.map(r => {
+      const id = r.id || r._id;
+      const status = String(r.status || 'pending').toLowerCase();
+      const email = String(r.email || '');
+      const name = String(r.name || r.full_name || 'Unnamed user');
+
+      // Escape values before inserting them into HTML.
+      const escapeHTML = value => String(value).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      })[ch]);
+
+      if (!id) return '';
+
+      return `
+        <div class="border rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div class="font-medium text-sm">${escapeHTML(name)}</div>
+            <div class="text-xs text-slate-500">${escapeHTML(email)}</div>
+            <span class="inline-block mt-1 text-xs rounded-full px-2 py-1 ${
+              status === 'rejected'
+                ? 'bg-red-100 text-red-700'
+                : 'bg-amber-100 text-amber-700'
+            }">${escapeHTML(status)}</span>
+          </div>
+          <button
+            type="button"
+            class="text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg px-3 py-2"
+            data-request-id="${escapeHTML(id)}"
+          >Delete request</button>
+        </div>
+      `;
+    }).join('');
+
+    box.querySelectorAll('[data-request-id]').forEach(button => {
+      button.addEventListener('click', async () => {
+        const requestId = button.dataset.requestId;
+
+        if (!confirm('Delete this credential request? This should not delete a patient record.')) {
+          return;
+        }
+
+        button.disabled = true;
+        button.textContent = 'Deleting…';
+
+        try {
+          await api.deleteCredentialRequest(requestId);
+          await loadCredentialRequests();
+        } catch (error) {
+          alert('Could not delete request: ' + error.message);
+          button.disabled = false;
+          button.textContent = 'Delete request';
+        }
+      });
+    });
+  } catch (error) {
+    box.textContent = 'Could not load credential requests: ' + error.message;
+  }
+}
 load();
 setInterval(loadInbox, 12000);
 </script>
