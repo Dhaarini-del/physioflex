@@ -409,12 +409,18 @@ async function savePatient() {
 }
 async function deletePatient() {
   if (!selectedPatientId || !confirm('Delete this patient?')) return;
-  await api.deletePatient(selectedPatientId);
-  await api.deleteCredentialRequest(requestId);
-  selectedPatientId = null;
-  document.getElementById('detailPanel').classList.add('hidden');
-  document.getElementById('detailEmpty').classList.remove('hidden');
-  load();
+
+  try {
+    await api.deletePatient(selectedPatientId);
+    selectedPatientId = null;
+
+    document.getElementById('detailPanel').classList.add('hidden');
+    document.getElementById('detailEmpty').classList.remove('hidden');
+
+    await load();
+  } catch (e) {
+    alert('Could not delete patient: ' + e.message);
+  }
 }
 function openSuggestionModal() {
   if (!selectedPatientId) return alert('Select a patient first');
