@@ -512,6 +512,86 @@ async function sendPatientMsg() {
   }
 }
 
+async function loadCredentialRequests() {
+  const box = document.getElementById('credentialRequestsList');
+  if (!box) return;
+
+  box.textContent = 'Loading requests…';
+
+  try {
+    const response = await api.credentialRequests();
+
+    // Support either a direct array or an object containing requests.
+    const requests = Array.isArray(response)
+      ? response
+      : (response.requests || response.credential_requests || []);
+
+    const visible = requests.filter(r =>
+      ['pending', 'rejected', 'pending_login', 'pending_credentials']
+        .includes(String(r.status || '').toLowerCase())
+    );
+
+    if (!visible.length) {
+      box.innerHTML =
+        '<p class="text-sm text-slate-400">No pending or rejected requests.</p>';
+      return;
+    }
+
+    box.innerHTML = visible.map(r => {
+      const id = String(r.id || r._id || '');
+      const name = escapeCredentialText(r.name || r.full_name || 'Unnamed');
+      const email = escapeCredentialText(r.email || 'No email');
+      const status = escapeCredentialText(r.status || 'unknown');
+
+      return `
+        <div class="flex flex-wrap items-center justify-between gap-3 border rounded-xl p-3">
+          <div>
+            <div class="font-medium text-sm">${name}</div>
+            <div class="text-xs text-slate-500">${email}</div>
+            <div class="text-xs mt-1">Status: ${status}</div>
+          </div>
+          <button
+            class="text-sm text-red-600 border border-red-200 rounded-lg px-3 py-2"
+            onclick="removeCredentialRequest('${encodeURIComponent(id)}')">
+            Delete request
+          </button>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    box.textContent = 'Could not load requests: ' + e.message;
+  }
+}
+
+function escapeCredentialText(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[ch]);
+}
+
+async function removeCredentialRequest(encodedId) {
+  const requestId = decodeURIComponent(encodedId);
+  if (!requestId) {
+    alert('Request ID is missing.');
+    return;
+  }
+
+  if (!confirm('Delete this pending/rejected login request? This will not delete clinical records.')) {
+    return;
+  }
+
+  try {
+    await api.deleteCredentialRequest(requestId);
+    alert('Login request deleted.');
+    await loadCredentialRequests();
+  } catch (e) {
+    alert('Could not delete request: ' + e.message);
+  }
+}
 load();
 loadMessages();
 setInterval(loadMessages, 10000);
