@@ -594,7 +594,9 @@ async function removeCredentialRequest(encodedId) {
 }
 load();
 loadMessages();
+loadCredentialRequests();
 setInterval(loadMessages, 10000);
+setInterval(loadCredentialRequests, 30000);
 </script>
 
 <link rel="stylesheet" href="/static/chat-widget.css">
