@@ -905,7 +905,9 @@ async def provision_credentials(req_id: str, body: ProvisionCredentials, user: T
 @app.delete("/api/admin/credential-requests/{req_id}")
 async def delete_credential_request(
     req_id: str,
-    user: TokenData = Depends(require_role("admin")),
+   user: TokenData = Depends(
+    require_role("admin", "doctor", "physiotherapist")
+),
 ):
     """
     Admin rejects/removes a pending patient login credential request.
